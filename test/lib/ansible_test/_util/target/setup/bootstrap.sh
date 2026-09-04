@@ -2,6 +2,24 @@
 
 set -eu
 
+retry_init()
+{
+    attempt=0
+}
+
+retry_or_fail()
+{
+    attempt=$((attempt + 1))
+
+    if [ $attempt -gt 5 ]; then
+      echo "Failed to install packages. Giving up."
+      exit 1
+    fi
+
+    echo "Failed to install packages. Sleeping before trying again..."
+    sleep 10
+}
+
 remove_externally_managed_marker()
 {
     "${python_interpreter}" -c '
@@ -26,13 +44,13 @@ install_ssh_keys()
         echo "${ssh_private_key}" > "${ssh_private_key_path}"
 
         # add public key to authorized_keys
-        authoried_keys_path="${HOME}/.ssh/authorized_keys"
+        authorized_keys_path="${HOME}/.ssh/authorized_keys"
 
         # the existing file is overwritten to avoid conflicts (ex: RHEL on EC2 blocks root login)
-        cat "${public_key_path}" > "${authoried_keys_path}"
-        chmod 0600 "${authoried_keys_path}"
+        cat "${public_key_path}" > "${authorized_keys_path}"
+        chmod 0600 "${authorized_keys_path}"
 
-        # add localhost's server keys to known_hosts
+        # add localhost server keys to known_hosts
         known_hosts_path="${HOME}/.ssh/known_hosts"
 
         for key in /etc/ssh/ssh_host_*_key.pub; do
@@ -53,25 +71,122 @@ customize_bashrc()
     fi
 
     # Improve shell prompts for interactive use.
-    echo "export PS1='\[\e]0;\u@\h: \w\a\]\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '" >> ~/.bashrc
+    echo "export PS1='"'\[\e]0;\u@\h: \w\a\]\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '"'" >> ~/.bashrc
 }
 
 install_pip() {
     if ! "${python_interpreter}" -m pip.__main__ --version --disable-pip-version-check 2>/dev/null; then
         case "${python_version}" in
             *)
-                pip_bootstrap_url="https://ci-files.testing.ansible.com/ansible-test/get-pip-23.1.2.py"
+                pip_bootstrap_url="https://ci-files.testing.ansible.com/ansible-test/get-pip-24.0.py"
                 ;;
         esac
 
+        retry_init
         while true; do
             curl --silent --show-error "${pip_bootstrap_url}" -o /tmp/get-pip.py && \
             "${python_interpreter}" /tmp/get-pip.py --disable-pip-version-check --quiet && \
             rm /tmp/get-pip.py \
             && break
-            echo "Failed to install packages. Sleeping before trying again..."
-            sleep 10
+            retry_or_fail
         done
+    fi
+}
+
+install_powershell() {
+    if [ ! "${powershell_versions}" ]; then
+        return
+    fi
+
+    for powershell_version in ${powershell_versions}; do
+        install_powershell_version
+    done
+}
+
+install_powershell_version() {
+    version="${powershell_version}"
+    major_version="$(echo "${version}" | cut -f 1 -d .)"
+    minor_version="$(echo "${version}" | cut -f 2 -d .)"
+    major_minor_version="${major_version}.${minor_version}"
+    install_dir="/opt/microsoft/powershell/${major_minor_version}"
+    pwsh_installed_bin="${install_dir}/pwsh"
+    pwsh_versioned_bin="/usr/local/bin/pwsh${major_minor_version}"
+
+    if [ -x "${pwsh_versioned_bin}" ]; then
+        echo "Detected PowerShell ${major_minor_version} at: ${pwsh_versioned_bin}"
+        return
+    fi
+
+    echo "Bootstrapping PowerShell ${major_minor_version} at: ${pwsh_versioned_bin}"
+
+    system="$("${python_interpreter}" -c 'import platform; print(platform.system());')"
+
+    case "${system}" in
+        Linux)
+            if ! "${python_interpreter}" -c "import os; os.confstr('CS_GNU_LIBC_VERSION');" 2>/dev/null; then
+                echo "Only glibc-based Linux distributions are supported."
+                exit 1
+            fi
+
+            system="linux"
+            ;;
+        Darwin)
+            system="osx"
+            ;;
+        *)
+            echo "Unsupported system: ${system}"
+            exit 1
+            ;;
+    esac
+
+    arch="$("${python_interpreter}" -c 'import platform; print(platform.machine());')"
+
+    case "${arch}" in
+        x86_64)
+            arch="x64"
+            ;;
+        aarch64)
+            arch="arm64"
+            ;;
+        arm64)
+            arch="arm64"
+            ;;
+        *)
+            echo "Unsupported architecture: ${arch}"
+            exit 1
+            ;;
+    esac
+
+    url="https://github.com/PowerShell/PowerShell/releases/download/v${version}/powershell-${version}-${system}-${arch}.tar.gz"
+    tmp_file="/tmp/powershell-${major_minor_version}.tgz"
+
+    retry_init
+    while true; do
+        curl --silent --show-error --location "${url}" -o "${tmp_file}" \
+        && break
+        retry_or_fail
+    done
+
+    mkdir -p "${install_dir}"
+    tar zxf "${tmp_file}" --no-same-owner --no-same-permissions -C "${install_dir}"
+    rm "${tmp_file}"
+    find "${install_dir}" -type f -exec chmod -x "{}" ";"
+    chmod +x "${pwsh_installed_bin}"
+    ln -s "${pwsh_installed_bin}" "${pwsh_versioned_bin}"
+}
+
+optimize_dnf()
+{
+    if ! grep ansible-test /etc/dnf/dnf.conf > /dev/null; then
+        cat >> /etc/dnf/dnf.conf <<EOF
+# ansible-test
+minrate=1M
+timeout=15
+retries=5
+max_parallel_downloads=10
+zchunk=0
+deltarpm=0
+EOF
     fi
 }
 
@@ -99,22 +214,25 @@ bootstrap_remote_alpine()
             "
     fi
 
+    retry_init
     while true; do
         # shellcheck disable=SC2086
         apk add -q ${packages} \
         && break
-        echo "Failed to install packages. Sleeping before trying again..."
-        sleep 10
+        retry_or_fail
     done
 
     # Upgrade the `libexpat` package to ensure that an upgraded Python (`pyexpat`) continues to work.
+    retry_init
     while true; do
         # shellcheck disable=SC2086
         apk upgrade -q libexpat \
         && break
-        echo "Failed to upgrade libexpat. Sleeping before trying again..."
-        sleep 10
+        retry_or_fail
     done
+
+    # Allow root to use sudo to facilitate become testing as is done in other test environments.
+    echo "root ALL=(ALL) ALL" > /etc/sudoers.d/root
 }
 
 bootstrap_remote_fedora()
@@ -125,6 +243,7 @@ bootstrap_remote_fedora()
         acl
         gcc
         ${py_pkg_prefix}-devel
+        which
         "
 
     if [ "${controller}" ]; then
@@ -138,12 +257,24 @@ bootstrap_remote_fedora()
             "
     fi
 
+    retry_init
     while true; do
         # shellcheck disable=SC2086
         dnf install -q -y ${packages} \
         && break
-        echo "Failed to install packages. Sleeping before trying again..."
-        sleep 10
+        retry_or_fail
+    done
+
+    packages="
+        expat
+        "
+
+    retry_init
+    while true; do
+        # shellcheck disable=SC2086
+        dnf update -q -y ${packages} \
+        && break
+        retry_or_fail
     done
 }
 
@@ -154,6 +285,7 @@ bootstrap_remote_freebsd()
         py${python_package_version}-sqlite3
         py${python_package_version}-setuptools
         bash
+        ca_root_nss
         curl
         gtar
         sudo
@@ -162,26 +294,20 @@ bootstrap_remote_freebsd()
     if [ "${controller}" ]; then
         jinja2_pkg="py${python_package_version}-jinja2"
         cryptography_pkg="py${python_package_version}-cryptography"
-        pyyaml_pkg="py${python_package_version}-yaml"
+        pyyaml_pkg="py${python_package_version}-pyyaml"
         packaging_pkg="py${python_package_version}-packaging"
 
         # Declare platform/python version combinations which do not have supporting OS packages available.
         # For these combinations ansible-test will use pip to install the requirements instead.
         case "${platform_version}/${python_version}" in
-            13.3/3.9)
-                # defaults above 'just work'TM
-                ;;
-            13.3/3.11)
+            "14.4/3.14")
                 jinja2_pkg=""  # not available
                 cryptography_pkg=""  # not available
                 pyyaml_pkg=""  # not available
                 ;;
-            14.0/3.9)
-                # defaults above 'just work'TM
-                ;;
-            14.0/3.11)
-                cryptography_pkg=""  # not available
+            "15.1/3.14")
                 jinja2_pkg=""  # not available
+                cryptography_pkg=""  # not available
                 pyyaml_pkg=""  # not available
                 ;;
             *)
@@ -203,13 +329,13 @@ bootstrap_remote_freebsd()
             "
     fi
 
+    retry_init
     while true; do
         # shellcheck disable=SC2086
         env ASSUME_ALWAYS_YES=YES pkg bootstrap && \
         pkg install -q -y ${packages} \
         && break
-        echo "Failed to install packages. Sleeping before trying again..."
-        sleep 10
+        retry_or_fail
     done
 
     install_pip
@@ -222,7 +348,7 @@ bootstrap_remote_freebsd()
     # make additional wheels available for packages which lack them for this platform
     echo "# generated by ansible-test
 [global]
-extra-index-url = https://spare-tire.testing.ansible.com/simple/
+extra-index-url = https://spare-tire.core.ansible.com/simple/
 prefer-binary = yes
 " > /etc/pip.conf
 
@@ -238,6 +364,7 @@ prefer-binary = yes
 
     # enable sudo without a password for the wheel group, allowing ansible to use the sudo become plugin
     echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /usr/local/etc/sudoers.d/ansible-test
+    chmod 440 /usr/local/etc/sudoers.d/ansible-test
 }
 
 bootstrap_remote_macos()
@@ -259,6 +386,8 @@ bootstrap_remote_macos()
 
 bootstrap_remote_rhel_9()
 {
+    optimize_dnf
+
     if [ "${python_version}" = "3.9" ]; then
         py_pkg_prefix="python3"
     else
@@ -268,19 +397,52 @@ bootstrap_remote_rhel_9()
     packages="
         gcc
         ${py_pkg_prefix}-devel
+        ${py_pkg_prefix}-pip
         "
-
-    # pip is not included in the Python devel package under Python 3.11
-    if [ "${python_version}" != "3.9" ]; then
-        packages="
-            ${packages}
-            ${py_pkg_prefix}-pip
-        "
-    fi
 
     # Jinja2 is not installed with an OS package since the provided version is too old.
     # Instead, ansible-test will install it using pip.
-    # packaging and resolvelib are missing for Python 3.11 (and possible later) so we just
+    # packaging and resolvelib are missing for controller supported Python versions, so we just
+    # skip them and let ansible-test install them from PyPI.
+    #
+    # sqlite-libs needs to be specified currently to get sqlite3 imports working
+    # https://redhat.atlassian.net/browse/RHEL-178008
+    if [ "${controller}" ]; then
+        packages="
+            ${packages}
+            sqlite-libs
+            ${py_pkg_prefix}-cryptography
+            ${py_pkg_prefix}-pyyaml
+            "
+    fi
+
+    retry_init
+    while true; do
+        # shellcheck disable=SC2086
+        dnf install -q -y ${packages} \
+        && break
+        retry_or_fail
+    done
+}
+
+bootstrap_remote_rhel_10()
+{
+    optimize_dnf
+
+    if [ "${python_version}" = "3.12" ]; then
+        py_pkg_prefix="python3"
+    else
+        py_pkg_prefix="python${python_version}"
+    fi
+
+    packages="
+        gcc
+        python3-packaging
+        ${py_pkg_prefix}-devel
+        ${py_pkg_prefix}-pip
+        "
+
+    # Jinja2, packaging and resolvelib are missing for controller supported Python versions, so we just
     # skip them and let ansible-test install them from PyPI.
     if [ "${controller}" ]; then
         packages="
@@ -290,19 +452,21 @@ bootstrap_remote_rhel_9()
             "
     fi
 
+    retry_init
     while true; do
         # shellcheck disable=SC2086
         dnf install -q -y ${packages} \
         && break
-        echo "Failed to install packages. Sleeping before trying again..."
-        sleep 10
+        retry_or_fail
     done
 }
 
 bootstrap_remote_rhel()
 {
     case "${platform_version}" in
+        8.*) bootstrap_remote_rhel_9 ;;
         9.*) bootstrap_remote_rhel_9 ;;
+        10.*) bootstrap_remote_rhel_10 ;;
     esac
 }
 
@@ -329,10 +493,6 @@ bootstrap_remote_ubuntu()
         # For these ansible-test will use pip to install the requirements instead.
         # Only the platform is checked since Ubuntu shares Python packages across Python versions.
         case "${platform_version}" in
-            "20.04")
-                jinja2_pkg=""  # too old
-                resolvelib_pkg=""  # not available
-                ;;
         esac
 
         packages="
@@ -345,13 +505,13 @@ bootstrap_remote_ubuntu()
             "
     fi
 
+    retry_init
     while true; do
         # shellcheck disable=SC2086
         apt-get update -qq -y && \
         DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends ${packages} \
         && break
-        echo "Failed to install packages. Sleeping before trying again..."
-        sleep 10
+        retry_or_fail
     done
 }
 
@@ -410,6 +570,8 @@ bootstrap()
         "docker") bootstrap_docker ;;
         "remote") bootstrap_remote ;;
     esac
+
+    install_powershell
 }
 
 # These variables will be templated before sending the script to the host.
@@ -422,5 +584,6 @@ python_interpreters=#{python_interpreters}
 ssh_key_type=#{ssh_key_type}
 ssh_private_key=#{ssh_private_key}
 ssh_public_key=#{ssh_public_key}
+powershell_versions=#{powershell_versions}
 
 bootstrap

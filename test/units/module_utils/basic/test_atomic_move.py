@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import errno
-import json
 from itertools import product
 
 import pytest
@@ -48,6 +47,7 @@ def atomic_mocks(mocker, monkeypatch):
         'copyfileobj': mocker.patch('shutil.copyfileobj'),
         'move': mocker.patch('shutil.move'),
         'mkstemp': mocker.patch('tempfile.mkstemp'),
+        'utime': mocker.patch('os.utime'),
     }
 
     mocks['getlogin'].return_value = 'root'
@@ -72,7 +72,7 @@ def fake_stat(mocker):
     yield stat1
 
 
-@pytest.mark.parametrize('stdin, selinux', product([{}], (True, False)), indirect=['stdin'])
+@pytest.mark.parametrize('stdin, selinux', list(product([{}], (True, False))), indirect=['stdin'])
 def test_new_file(atomic_am, atomic_mocks, mocker, selinux):
     # test destination does not exist, login name = 'root', no environment, os.rename() succeeds
     mock_context = atomic_am.selinux_default_context.return_value
@@ -92,7 +92,7 @@ def test_new_file(atomic_am, atomic_mocks, mocker, selinux):
         assert not atomic_am.set_context_if_different.called
 
 
-@pytest.mark.parametrize('stdin, selinux', product([{}], (True, False)), indirect=['stdin'])
+@pytest.mark.parametrize('stdin, selinux', list(product([{}], (True, False))), indirect=['stdin'])
 def test_existing_file(atomic_am, atomic_mocks, fake_stat, mocker, selinux):
     # Test destination already present
     mock_context = atomic_am.selinux_context.return_value
@@ -135,7 +135,7 @@ def test_no_tty_fallback(atomic_am, atomic_mocks, fake_stat, mocker):
 
 @pytest.mark.parametrize('stdin', [{}], indirect=['stdin'])
 def test_existing_file_stat_failure(atomic_am, atomic_mocks, mocker):
-    """Failure to stat an existing file in order to copy permissions propogates the error (unless EPERM)"""
+    """Failure to stat an existing file in order to copy permissions propagates the error (unless EPERM)"""
     atomic_mocks['copystat'].side_effect = FileNotFoundError('testing os copystat with non EPERM error')
     atomic_mocks['path_exists'].return_value = True
 
@@ -168,15 +168,12 @@ def test_rename_failure(atomic_am, atomic_mocks, mocker, capfd):
     atomic_mocks['path_exists'].side_effect = [False, False]
     atomic_mocks['rename'].side_effect = OSError(errno.EIO, 'failing with EIO')
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(Exception, match='Could not replace') as err:
         atomic_am.atomic_move('/path/to/src', '/path/to/dest')
 
-    out, err = capfd.readouterr()
-    results = json.loads(out)
-
-    assert 'Could not replace file' in results['msg']
-    assert 'failing with EIO' in results['msg']
-    assert results['failed']
+    assert isinstance(err.value.__cause__, OSError)
+    assert err.value.__cause__.errno == errno.EIO
+    assert err.value.__cause__.strerror == 'failing with EIO'
 
 
 @pytest.mark.parametrize('stdin', [{}], indirect=['stdin'])
@@ -189,17 +186,11 @@ def test_rename_perms_fail_temp_creation_fails(atomic_am, atomic_mocks, mocker, 
     atomic_mocks['mkstemp'].side_effect = OSError()
     atomic_am.selinux_enabled.return_value = False
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(Exception, match='is not writable by the current user'):
         atomic_am.atomic_move('/path/to/src', '/path/to/dest')
 
-    out, err = capfd.readouterr()
-    results = json.loads(out)
 
-    assert 'is not writable by the current user' in results['msg']
-    assert results['failed']
-
-
-@pytest.mark.parametrize('stdin, selinux', product([{}], (True, False)), indirect=['stdin'])
+@pytest.mark.parametrize('stdin, selinux', list(product([{}], (True, False))), indirect=['stdin'])
 def test_rename_perms_fail_temp_succeeds(atomic_am, atomic_mocks, fake_stat, mocker, selinux):
     """Test os.rename raising an error but fallback to using mkstemp works"""
     mock_context = atomic_am.selinux_default_context.return_value

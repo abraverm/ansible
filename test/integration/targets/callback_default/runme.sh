@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# DTFIX-FUTURE: convert this to the new output validation test format, which will ignore things like host path changes
+
 # This test compares "known good" output with various settings against output
 # with the current code. It's brittle by nature, but this is probably the
 # "best" approach possible.
@@ -12,6 +14,10 @@
 #   for consistency
 
 set -eux
+
+export ANSIBLE_DISPLAY_TRACEBACK=never  # override anything ansible-test set, it will screw up the test diffs
+
+umask 0022
 
 run_test() {
 	local testname=$1
@@ -29,13 +35,20 @@ run_test() {
 	sed -i -e 's/@@ -1,1 +1,1 @@/@@ -1 +1 @@/g' "${OUTFILE}.${testname}.stdout"
 	sed -i -e 's/: .*\/test_diff\.txt/: ...\/test_diff.txt/g' "${OUTFILE}.${testname}.stdout"
 	sed -i -e "s#${ANSIBLE_PLAYBOOK_DIR}#TEST_PATH#g" "${OUTFILE}.${testname}.stdout" "${OUTFILE}.${testname}.stderr"
-	sed -i -e "s#/var/root/#/root/#g" "${OUTFILE}.${testname}.stdout" "${OUTFILE}.${testname}.stderr"  # macos
 	sed -i -e 's/^Using .*//g' "${OUTFILE}.${testname}.stdout"
 	sed -i -e 's/[0-9]:[0-9]\{2\}:[0-9]\{2\}\.[0-9]\{6\}/0:00:00.000000/g' "${OUTFILE}.${testname}.stdout"
 	sed -i -e 's/[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\} [0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\.[0-9]\{6\}/0000-00-00 00:00:00.000000/g' "${OUTFILE}.${testname}.stdout"
 	sed -i -e 's#: .*/\.source\.txt$#: .../.source.txt#g' "${OUTFILE}.${testname}.stdout"
 	sed -i -e '/secontext:/d' "${OUTFILE}.${testname}.stdout"
-	sed -i -e 's/group: wheel/group: root/g' "${OUTFILE}.${testname}.stdout"
+
+	# normalize gid/group/owner/uid/homedir so tests can run as non-root user
+	ESC_HOME=$(echo "${HOME}" | sed -e 's/\//\\\//g')
+	sed -i -e "s/${ESC_HOME}/\/<<HOMEDIR>>/g" "${OUTFILE}.${testname}.stdout"
+	sed -i -e "s/${ESC_HOME}/\/<<HOMEDIR>>/g" "${OUTFILE}.${testname}.stderr"
+	sed -i -e "s/gid: $(id -g)/gid: <<GID>>/g" "${OUTFILE}.${testname}.stdout"
+	sed -i -e "s/group: $(id -gn)/group: <<GROUP>>/g" "${OUTFILE}.${testname}.stdout"
+	sed -i -e "s/owner: $(id -un)/owner: <<OWNER>>/g" "${OUTFILE}.${testname}.stdout"
+	sed -i -e "s/uid: $(id -u)/uid: <<UID>>/g" "${OUTFILE}.${testname}.stdout"
 
 	diff -u "${ORIGFILE}.${testname}.stdout" "${OUTFILE}.${testname}.stdout" || diff_failure
 	diff -u "${ORIGFILE}.${testname}.stderr" "${OUTFILE}.${testname}.stderr" || diff_failure
@@ -157,6 +170,27 @@ export ANSIBLE_DISPLAY_OK_HOSTS=0
 
 run_test hide_ok test.yml
 
+# Hide include
+export ANSIBLE_DISPLAY_SKIPPED_HOSTS=1
+export ANSIBLE_DISPLAY_OK_HOSTS=1
+export ANSIBLE_DISPLAY_INCLUDED_HOSTS=0
+
+run_test hide_included test.yml
+
+# Hide skipped/ok/included
+export ANSIBLE_DISPLAY_SKIPPED_HOSTS=0
+export ANSIBLE_DISPLAY_OK_HOSTS=0
+export ANSIBLE_DISPLAY_INCLUDED_HOSTS=0
+
+run_test hide_skipped_ok_included test.yml
+
+# Hide ok
+export ANSIBLE_DISPLAY_SKIPPED_HOSTS=1
+export ANSIBLE_DISPLAY_OK_HOSTS=0
+export ANSIBLE_DISPLAY_INCLUDED_HOSTS=1
+
+run_test hide_ok test.yml
+
 # Failed to stderr
 export ANSIBLE_DISPLAY_SKIPPED_HOSTS=1
 export ANSIBLE_DISPLAY_OK_HOSTS=1
@@ -190,7 +224,18 @@ export ANSIBLE_DISPLAY_FAILED_STDERR=0
 
 export ANSIBLE_CALLBACK_RESULT_FORMAT=yaml
 run_test result_format_yaml test.yml
+export ANSIBLE_CALLBACK_RESULT_INDENTATION=2
+run_test result_format_yaml_indent_2 test.yml
 export ANSIBLE_CALLBACK_RESULT_FORMAT=json
+unset ANSIBLE_CALLBACK_RESULT_INDENTATION
+
+export ANSIBLE_CALLBACK_RESULT_FORMAT=yaml
+export ANSIBLE_CALLBACK_YAML_LINE_WIDTH=default
+run_test result_format_yaml_default_break test_long_line.yml
+export ANSIBLE_CALLBACK_YAML_LINE_WIDTH=no-break
+run_test result_format_yaml_no_break test_long_line.yml
+export ANSIBLE_CALLBACK_RESULT_FORMAT=json
+unset ANSIBLE_CALLBACK_YAML_LINE_WIDTH
 
 export ANSIBLE_CALLBACK_RESULT_FORMAT=yaml
 export ANSIBLE_CALLBACK_FORMAT_PRETTY=1
@@ -237,6 +282,13 @@ cat meta_test.out
 rm -f meta_test.out
 
 # Ensure free/host_pinned non-lockstep strategies display correctly
-diff -u callback_default.out.free.stdout <(ANSIBLE_STRATEGY=free ansible-playbook -i inventory test_non_lockstep.yml 2>/dev/null)
-diff -u callback_default.out.fqcn_free.stdout <(ANSIBLE_STRATEGY=ansible.builtin.free ansible-playbook -i inventory test_non_lockstep.yml 2>/dev/null)
-diff -u callback_default.out.host_pinned.stdout <(ANSIBLE_STRATEGY=host_pinned ansible-playbook -i inventory test_non_lockstep.yml 2>/dev/null)
+for strategy in free ansible.builtin.free host_pinned; do
+    ANSIBLE_STRATEGY=$strategy ansible-playbook -i inventory test_non_lockstep.yml 2>/dev/null | tee non_lockstep_test.out
+    # Verify callback output structure by normalizing hostnames
+    diff -u callback_default.out.non_lockstep.stdout <(sed 's/testhost1[0-9]/testhostXX/g' non_lockstep_test.out)
+    # Verify each host completed the expected number of tasks
+    for host in testhost10 testhost11 testhost12; do
+        test "$(grep -c "changed: \[$host\]" non_lockstep_test.out)" -eq 3
+    done
+done
+rm -f non_lockstep_test.out

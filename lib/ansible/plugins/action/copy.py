@@ -23,12 +23,12 @@ import os
 import os.path
 import stat
 import tempfile
-import traceback
+import typing as _t
 
 from ansible import constants as C
-from ansible.errors import AnsibleError, AnsibleFileNotFound
+from ansible.errors import AnsibleError, AnsibleActionFail, AnsibleFileNotFound
 from ansible.module_utils.basic import FILE_COMMON_ARGUMENTS
-from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
+from ansible.module_utils.common.text.converters import to_bytes, to_text
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
 from ansible.utils.hashing import checksum
@@ -203,12 +203,16 @@ class ActionModule(ActionBase):
 
     TRANSFERS_FILES = True
 
-    def _ensure_invocation(self, result):
+    def _ensure_invocation(self, result: dict[str, _t.Any], task_vars: dict[str, _t.Any] | None = None) -> dict[str, _t.Any]:
         # NOTE: adding invocation arguments here needs to be kept in sync with
         # any no_log specified in the argument_spec in the module.
         # This is not automatic.
         # NOTE: do not add to this. This should be made a generic function for action plugins.
         # This should also use the same argspec as the module instead of keeping it in sync.
+        if not C.config.get_config_value('INJECT_INVOCATION', variables=task_vars or {}, templar=self._templar):
+            result.pop('invocation', None)
+            return result
+
         if 'invocation' not in result:
             if self._task.no_log:
                 result['invocation'] = "CENSORED: no_log is set"
@@ -389,17 +393,15 @@ class ActionModule(ActionBase):
         return result
 
     def _create_content_tempfile(self, content):
-        ''' Create a tempfile containing defined content '''
+        """ Create a tempfile containing defined content """
         fd, content_tempfile = tempfile.mkstemp(dir=C.DEFAULT_LOCAL_TMP, prefix='.')
-        f = os.fdopen(fd, 'wb')
         content = to_bytes(content)
         try:
-            f.write(content)
+            with os.fdopen(fd, 'wb') as f:
+                f.write(content)
         except Exception as err:
             os.remove(content_tempfile)
             raise Exception(err)
-        finally:
-            f.close()
         return content_tempfile
 
     def _remove_tempfile_if_content_defined(self, content, content_tempfile):
@@ -407,12 +409,27 @@ class ActionModule(ActionBase):
             os.remove(content_tempfile)
 
     def run(self, tmp=None, task_vars=None):
-        ''' handler for file transfer operations '''
+        try:
+            result = self._run(task_vars=task_vars)
+            return self._ensure_invocation(result, task_vars=task_vars)
+        except AnsibleActionFail as aaf:
+            # twiddle `invocation` on the stored result, if any
+            self._ensure_invocation(aaf.result, task_vars=task_vars)
+            raise
+
+    def _run(self, tmp=None, task_vars=None):
+        """ handler for file transfer operations """
         if task_vars is None:
             task_vars = dict()
 
         result = super(ActionModule, self).run(tmp, task_vars)
+
         del tmp  # tmp no longer has any effect
+
+        # ensure user is not setting internal parameters
+        for internal in ('_original_basename', '_diff_peek'):
+            if self._task.args.get(internal, None) is not None:
+                raise AnsibleActionFail(f'Invalid parameter specified: "{internal}"')
 
         source = self._task.args.get('src', None)
         content = self._task.args.get('content', None)
@@ -433,7 +450,7 @@ class ActionModule(ActionBase):
             del result['failed']
 
         if result.get('failed'):
-            return self._ensure_invocation(result)
+            return result
 
         # Define content_tempfile in case we set it after finding content populated.
         content_tempfile = None
@@ -448,16 +465,14 @@ class ActionModule(ActionBase):
                 else:
                     content_tempfile = self._create_content_tempfile(content)
                 source = content_tempfile
-            except Exception as err:
-                result['failed'] = True
-                result['msg'] = "could not write content temp file: %s" % to_native(err)
-                return self._ensure_invocation(result)
+            except Exception as ex:
+                raise AnsibleActionFail(message="could not write content temp file", result=result) from ex
 
         # if we have first_available_file in our vars
         # look up the files and use the first one we find as src
         elif remote_src:
             result.update(self._execute_module(module_name='ansible.legacy.copy', task_vars=task_vars))
-            return self._ensure_invocation(result)
+            return result
         else:
             # find_needle returns a path that may not have a trailing slash on
             # a directory so we need to determine that now (we use it just
@@ -467,11 +482,8 @@ class ActionModule(ActionBase):
             try:
                 # find in expected paths
                 source = self._find_needle('files', source)
-            except AnsibleError as e:
-                result['failed'] = True
-                result['msg'] = to_text(e)
-                result['exception'] = traceback.format_exc()
-                return self._ensure_invocation(result)
+            except AnsibleError as ex:
+                raise AnsibleActionFail(result=result) from ex
 
             if trailing_slash != source.endswith(os.path.sep):
                 if source[-1] == os.path.sep:
@@ -525,13 +537,11 @@ class ActionModule(ActionBase):
 
             if module_return.get('failed'):
                 result.update(module_return)
-                return self._ensure_invocation(result)
+                return result
 
-            paths = os.path.split(source_rel)
-            dir_path = ''
-            for dir_component in paths:
-                os.path.join(dir_path, dir_component)
-                implicit_directories.add(dir_path)
+            while (source_rel := os.path.dirname(source_rel)) != '':
+                implicit_directories.add(source_rel)
+
             if 'diff' in result and not result['diff']:
                 del result['diff']
             module_executed = True
@@ -555,7 +565,7 @@ class ActionModule(ActionBase):
 
             if module_return.get('failed'):
                 result.update(module_return)
-                return self._ensure_invocation(result)
+                return result
 
             module_executed = True
             changed = changed or module_return.get('changed', False)
@@ -582,7 +592,7 @@ class ActionModule(ActionBase):
 
             if module_return.get('failed'):
                 result.update(module_return)
-                return self._ensure_invocation(result)
+                return result
 
             changed = changed or module_return.get('changed', False)
 
@@ -599,4 +609,4 @@ class ActionModule(ActionBase):
         # Delete tmp path
         self._remove_tmp_path(self._connection._shell.tmpdir)
 
-        return self._ensure_invocation(result)
+        return result

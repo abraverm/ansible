@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 
-DOCUMENTATION = r'''
+DOCUMENTATION = r"""
 module: user
 version_added: "0.2"
 short_description: Manage user accounts
@@ -37,19 +37,22 @@ options:
         version_added: "2.6"
     non_unique:
         description:
-            - Optionally when used with the -u option, this option allows to change the user ID to a non-unique value.
+            - Optionally when used with the C(-u) option, this option allows to change the user ID to a non-unique value.
+            - Not supported on distributions using BusyBox.
         type: bool
         default: no
         version_added: "1.1"
     seuser:
         description:
-            - Optionally sets the seuser type (user_u) on selinux enabled systems.
+            - Optionally sets the C(seuser) type C(user_u) on SELinux enabled systems.
+            - This parameter is silently ignored on systems where SELinux is not enabled.
+              A warning will be emitted in this case.
         type: str
         version_added: "2.1"
     group:
         description:
             - Optionally sets the user's primary group (takes a group name).
-            - On macOS, this defaults to V('staff')
+            - On macOS, this defaults to V(staff).
         type: str
     groups:
         description:
@@ -65,6 +68,7 @@ options:
             - If V(true), add the user to the groups specified in O(groups).
             - If V(false), user will only be added to the groups specified in O(groups),
               removing them from all other groups.
+            - From Ansible 2.21, this option is required when O(groups) is specified.
         type: bool
         default: no
     shell:
@@ -74,7 +78,8 @@ options:
               Since Ansible 2.5, the default shell for non-system users on macOS is V(/bin/bash).
             - On other operating systems, the default shell is determined by the underlying tool
               invoked by this module. See Notes for a per platform list of invoked tools.
-        type: str
+            - From Ansible 2.18, the type is changed to I(path) from I(str).
+        type: path
     home:
         description:
             - Optionally set the user's home directory.
@@ -91,11 +96,14 @@ options:
             - B(Linux/Unix/POSIX:) Enter the hashed password as the value.
             - See L(FAQ entry,https://docs.ansible.com/ansible/latest/reference_appendices/faq.html#how-do-i-generate-encrypted-passwords-for-the-user-module)
               for details on various ways to generate the hash of a password.
+            - The module writes the value directly to C(/etc/shadow) without any validation. Because the module cannot verify the user input,
+              providing an invalid value will likely result in authentication failure.
+              However, this behaviour can be utilized intentionally to lock a user account.
             - To create an account with a locked/disabled password on Linux systems, set this to V('!') or V('*').
             - To create an account with a locked/disabled password on OpenBSD, set this to V('*************').
             - B(OS X/macOS:) Enter the cleartext password as the value. Be sure to take relevant security precautions.
             - On macOS, the password specified in the C(password) option will always be set, regardless of whether the user account already exists or not.
-            - When the password is passed as an argument, the C(user) module will always return changed to C(true) for macOS systems.
+            - When the password is passed as an argument, the M(ansible.builtin.user) module will always return changed to C(true) for macOS systems.
               Since macOS no longer provides access to the hashed passwords directly.
         type: str
     state:
@@ -118,6 +126,7 @@ options:
         description:
             - "If set to V(true) when used with O(home), attempt to move the user's old home
               directory to the specified directory if it isn't there already and the old home exists."
+            - If O(local) is set to V(true), this option will be ignored if the current home directory does not exist.
         type: bool
         default: no
     system:
@@ -147,13 +156,14 @@ options:
         description:
             - Whether to generate a SSH key for the user in question.
             - This will B(not) overwrite an existing SSH key unless used with O(force=yes).
+            - Requires C(ssh-keygen) from OpenSSH.
         type: bool
         default: no
         version_added: "0.9"
     ssh_key_bits:
         description:
             - Optionally specify number of bits in SSH key to create.
-            - The default value depends on ssh-keygen.
+            - The default value depends on C(ssh-keygen).
         type: int
         version_added: "0.9"
     ssh_key_type:
@@ -204,7 +214,7 @@ options:
             - Lock the password (C(usermod -L), C(usermod -U), C(pw lock)).
             - Implementation differs by platform. This option does not always mean the user cannot login using other methods.
             - This option does not disable the user, only lock the password.
-            - This must be set to V(False) in order to unlock a currently locked password. The absence of this parameter will not unlock a password.
+            - This must be set to V(false) in order to unlock a currently locked password. The absence of this parameter will not unlock a password.
             - Currently supported on Linux, FreeBSD, DragonFlyBSD, NetBSD, OpenBSD.
         type: bool
         version_added: "2.6"
@@ -216,6 +226,7 @@ options:
             - This will check C(/etc/passwd) for an existing account before invoking commands. If the local account database
               exists somewhere other than C(/etc/passwd), this setting will not work properly.
             - This requires that the above commands as well as C(/etc/passwd) must exist on the target host, otherwise it will be a fatal error.
+            - Not supported on distributions using BusyBox.
         type: bool
         default: no
         version_added: "2.4"
@@ -265,9 +276,32 @@ options:
         description:
             - Sets the umask of the user.
             - Currently supported on Linux. Does nothing when used with other platforms.
-            - Requires O(local) is omitted or V(False).
+            - Requires O(local) is omitted or V(false).
         type: str
         version_added: "2.12"
+    password_expire_account_disable:
+        description:
+            - Number of days after a password expires until the account is disabled.
+            - Currently supported on AIX, Linux, NetBSD, OpenBSD.
+        type: int
+        version_added: "2.18"
+    uid_min:
+        description:
+            - Sets the UID_MIN value for user creation.
+            - Overwrites /etc/login.defs default value.
+            - Currently supported on Linux. Does nothing when used with other platforms.
+            - Requires O(local) is omitted or V(False).
+        type: int
+        version_added: "2.18"
+    uid_max:
+        description:
+            - Sets the UID_MAX value for user creation.
+            - Overwrites /etc/login.defs default value.
+            - Currently supported on Linux. Does nothing when used with other platforms.
+            - Requires O(local) is omitted or V(False).
+        type: int
+        version_added: "2.18"
+
 extends_documentation_fragment: action_common_attributes
 attributes:
     check_mode:
@@ -287,6 +321,9 @@ notes:
     C(/Library/Preferences/com.apple.loginwindow.plist).
   - On FreeBSD, this module uses C(pw useradd) and C(chpass) to create, C(pw usermod) and C(chpass) to modify,
     C(pw userdel) remove, C(pw lock) to lock, and C(pw unlock) to unlock accounts.
+  - On distributions using BusyBox, this module uses C(adduser), C(chpasswd), C(deluser), and C(delgroup).
+    The C(/etc/passwd) file is modified directly by this module and is backed up before modification.
+  - On distributions using BusyBox, O(move_home) is supported only if C(shadow) package is installed.
   - On all other platforms, this module uses C(useradd) to create, C(usermod) to modify, and
     C(userdel) to remove accounts.
 seealso:
@@ -295,9 +332,9 @@ seealso:
 - module: ansible.windows.win_user
 author:
 - Stephen Fromm (@sfromm)
-'''
+"""
 
-EXAMPLES = r'''
+EXAMPLES = r"""
 - name: Add the user 'johnd' with a specific uid and a primary group of 'admin'
   ansible.builtin.user:
     name: johnd
@@ -356,9 +393,14 @@ EXAMPLES = r'''
   ansible.builtin.user:
     name: jane157
     password_expire_warn: 30
-'''
 
-RETURN = r'''
+- name: Set number of days after password expires until account is disabled
+  ansible.builtin.user:
+    name: jimholden2016
+    password_expire_account_disable: 15
+"""
+
+RETURN = r"""
 append:
   description: Whether or not to append the user to groups.
   returned: When O(state) is V(present) and the user exists
@@ -385,8 +427,8 @@ group:
   type: int
   sample: 1001
 groups:
-  description: List of groups of which the user is a member.
-  returned: When O(groups) is not empty and O(state) is V(present)
+  description: Comma-separated list of groups of which the user is a member.
+  returned: When user exists and O(state) is V(present)
   type: str
   sample: 'chrony,apache'
 home:
@@ -457,10 +499,11 @@ uid:
   returned: When O(uid) is passed to the module
   type: int
   sample: 1044
-'''
+"""
 
 
 import ctypes.util
+from datetime import datetime
 import grp
 import calendar
 import os
@@ -471,15 +514,25 @@ import select
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 import math
+import typing as t
 
 from ansible.module_utils import distro
 from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.common.locale import get_best_parsable_locale
 from ansible.module_utils.common.sys_info import get_platform_subclass
-import ansible.module_utils.compat.typing as t
+
+
+# Placeholder home directories that should never be physically created on disk
+# These are conventions for system accounts that should not have real home directories
+PLACEHOLDER_HOME_DIRS = frozenset([
+    '/nonexistent',  # FreeBSD convention for system accounts (www, nobody, etc.)
+    '/dev/null',     # Used on some Linux systems for system accounts
+    '/var/empty',    # OpenBSD convention for privilege-separated processes
+])
 
 
 class StructSpwdType(ctypes.Structure):
@@ -511,6 +564,7 @@ except AttributeError:
 
 
 _HASH_RE = re.compile(r'[^a-zA-Z0-9./=]')
+LOCK_INDICATOR = '!'
 
 
 def getspnam(b_name):
@@ -582,9 +636,17 @@ class User(object):
         self.password_expire_min = module.params['password_expire_min']
         self.password_expire_warn = module.params['password_expire_warn']
         self.umask = module.params['umask']
+        self.inactive = module.params['password_expire_account_disable']
+        self.uid_min = module.params['uid_min']
+        self.uid_max = module.params['uid_max']
 
-        if self.umask is not None and self.local:
-            module.fail_json(msg="'umask' can not be used with 'local'")
+        if self.local:
+            if self.umask is not None:
+                module.fail_json(msg="'umask' can not be used with 'local'")
+            if self.uid_min is not None:
+                module.fail_json(msg="'uid_min' can not be used with 'local'")
+            if self.uid_max is not None:
+                module.fail_json(msg="'uid_max' can not be used with 'local'")
 
         if module.params['groups'] is not None:
             self.groups = ','.join(module.params['groups'])
@@ -599,12 +661,6 @@ class User(object):
             self.ssh_file = module.params['ssh_key_file']
         else:
             self.ssh_file = os.path.join('.ssh', 'id_%s' % self.ssh_type)
-
-        if self.groups is None and self.append:
-            # Change the argument_spec in 2.14 and remove this warning
-            # required_by={'append': ['groups']}
-            module.warn("'append' is set, but no 'groups' are specified. Use 'groups' for appending new groups."
-                        "This will change to an error in Ansible 2.14.")
 
     def check_password_encrypted(self):
         # Darwin needs cleartext password, so skip validation
@@ -691,7 +747,7 @@ class User(object):
             if self.non_unique:
                 cmd.append('-o')
 
-        if self.seuser is not None:
+        if self.seuser is not None and self.module.selinux_enabled():
             cmd.append('-Z')
             cmd.append(self.seuser)
         if self.group is not None:
@@ -757,6 +813,10 @@ class User(object):
             else:
                 cmd.append(time.strftime(self.DATE_FORMAT, self.expires))
 
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(int(self.inactive))
+
         if self.password is not None:
             cmd.append('-p')
             if self.password_lock:
@@ -780,6 +840,14 @@ class User(object):
 
         if self.system:
             cmd.append('-r')
+
+        if self.uid_min is not None:
+            cmd.append('-K')
+            cmd.append('UID_MIN=' + str(self.uid_min))
+
+        if self.uid_max is not None:
+            cmd.append('-K')
+            cmd.append('UID_MAX=' + str(self.uid_max))
 
         cmd.append(self.name)
         (rc, out, err) = self.execute_command(cmd)
@@ -911,11 +979,15 @@ class User(object):
             cmd.append('-c')
             cmd.append(self.comment)
 
-        if self.home is not None and info[5] != self.home:
+        existing_home = info[5]
+        if self.home is not None and existing_home != self.home:
             cmd.append('-d')
             cmd.append(self.home)
             if self.move_home:
-                cmd.append('-m')
+                if self.local and not os.path.exists(existing_home):
+                    self.module.warn("Ignoring move_home since home directory %s does not exist, but local is true" % existing_home)
+                else:
+                    cmd.append('-m')
 
         if self.shell is not None and info[6] != self.shell:
             cmd.append('-s')
@@ -945,6 +1017,10 @@ class User(object):
                     else:
                         cmd.append('-e')
                         cmd.append(time.strftime(self.DATE_FORMAT, self.expires))
+
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
 
         # Lock if no password or unlocked, unlock only if locked
         if self.password_lock and not info[1].startswith('!'):
@@ -1038,7 +1114,7 @@ class User(object):
         return groups
 
     def user_group_membership(self, exclude_primary=True):
-        ''' Return a list of groups the user belongs to '''
+        """ Return a list of groups the user belongs to """
         groups = []
         info = self.get_pwd_info()
         for group in grp.getgrall():
@@ -1167,9 +1243,11 @@ class User(object):
         overwrite = None
         try:
             ssh_key_file = self.get_ssh_key_path()
+            pub_file = f'{ssh_key_file}.pub'
         except Exception as e:
             return (1, '', to_native(e))
         ssh_dir = os.path.dirname(ssh_key_file)
+
         if not os.path.exists(ssh_dir):
             if self.module.check_mode:
                 return (0, '', '')
@@ -1178,12 +1256,23 @@ class User(object):
                 os.chown(ssh_dir, info[2], info[3])
             except OSError as e:
                 return (1, '', 'Failed to create %s: %s' % (ssh_dir, to_native(e)))
+
         if os.path.exists(ssh_key_file):
             if self.force:
-                # ssh-keygen doesn't support overwriting the key interactively, so send 'y' to confirm
+                self.module.warn(f'Overwriting existing ssh key private file "{ssh_key_file}"')
                 overwrite = 'y'
             else:
+                self.module.warn(f'Found existing ssh key private file "{ssh_key_file}", no force, so skipping ssh-keygen generation')
                 return (None, 'Key already exists, use "force: yes" to overwrite', '')
+
+        if os.path.exists(pub_file):
+            if self.force:
+                self.module.warn(f'Overwriting existing ssh key public file "{pub_file}"')
+                os.unlink(pub_file)
+            else:
+                self.module.warn(f'Found existing ssh key public file "{pub_file}", no force, so skipping ssh-keygen generation')
+                return (None, 'Public key already exists, use "force: yes" to overwrite', '')
+
         cmd = [self.module.get_bin_path('ssh-keygen', True)]
         cmd.append('-t')
         cmd.append(self.ssh_type)
@@ -1213,11 +1302,16 @@ class User(object):
                                      env=env)
                 out_buffer = b''
                 err_buffer = b''
+                first_prompt = b'Enter passphrase'
+                second_prompt = b'Enter same passphrase again'
+                prompt = first_prompt
+                start = datetime.now()
+                timeout = 900
                 while p.poll() is None:
                     r_list = select.select([master_out_fd, master_err_fd], [], [], 1)[0]
-                    first_prompt = b'Enter passphrase (empty for no passphrase):'
-                    second_prompt = b'Enter same passphrase again'
-                    prompt = first_prompt
+                    now = datetime.now()
+                    if (now - start).seconds > timeout:
+                        return (1, '', f'Timeout after {timeout} while reading passphrase for SSH key')
                     for fd in r_list:
                         if fd == master_out_fd:
                             chunk = os.read(master_out_fd, 10240)
@@ -1250,7 +1344,7 @@ class User(object):
             # If the keys were successfully created, we should be able
             # to tweak ownership.
             os.chown(ssh_key_file, info[2], info[3])
-            os.chown('%s.pub' % ssh_key_file, info[2], info[3])
+            os.chown(pub_file, info[2], info[3])
         return (rc, out, err)
 
     def ssh_key_fingerprint(self):
@@ -1269,7 +1363,7 @@ class User(object):
         try:
             with open(ssh_public_key_file, 'r') as f:
                 ssh_public_key = f.read().strip()
-        except IOError:
+        except OSError:
             return None
         return ssh_public_key
 
@@ -1304,16 +1398,24 @@ class User(object):
                     self.module.exit_json(failed=True, msg="%s" % to_native(e))
             # get umask from /etc/login.defs and set correct home mode
             if os.path.exists(self.LOGIN_DEFS):
-                with open(self.LOGIN_DEFS, 'r') as f:
-                    for line in f:
-                        m = re.match(r'^UMASK\s+(\d+)$', line)
-                        if m:
-                            umask = int(m.group(1), 8)
+                # fallback if neither HOME_MODE nor UMASK are set;
+                # follow behaviour of useradd initializing UMASK = 022
+                mode = 0o755
+                with open(self.LOGIN_DEFS, 'r') as fh:
+                    for line in fh:
+                        # HOME_MODE has higher precedence as UMASK
+                        match = re.match(r'^HOME_MODE\s+(\d+)$', line)
+                        if match:
+                            mode = int(match.group(1), 8)
+                            break  # higher precedence
+                        match = re.match(r'^UMASK\s+(\d+)$', line)
+                        if match:
+                            umask = int(match.group(1), 8)
                             mode = 0o777 & ~umask
-                            try:
-                                os.chmod(path, mode)
-                            except OSError as e:
-                                self.module.exit_json(failed=True, msg="%s" % to_native(e))
+                try:
+                    os.chmod(path, mode)
+                except OSError as e:
+                    self.module.exit_json(failed=True, msg=to_native(e))
 
     def chown_homedir(self, uid, gid, path):
         try:
@@ -1322,7 +1424,9 @@ class User(object):
                 for d in dirs:
                     os.chown(os.path.join(root, d), uid, gid)
                 for f in files:
-                    os.chown(os.path.join(root, f), uid, gid)
+                    full_path = os.path.join(root, f)
+                    if not os.path.islink(full_path):
+                        os.chown(full_path, uid, gid)
         except OSError as e:
             self.module.exit_json(failed=True, msg="%s" % to_native(e))
 
@@ -1444,6 +1548,14 @@ class FreeBsdUser(User):
             else:
                 cmd.append(str(calendar.timegm(self.expires)))
 
+        if self.uid_min is not None:
+            cmd.append('-K')
+            cmd.append('UID_MIN=' + str(self.uid_min))
+
+        if self.uid_max is not None:
+            cmd.append('-K')
+            cmd.append('UID_MAX=' + str(self.uid_max))
+
         # system cannot be handled currently - should we error if its requested?
         # create the user
         (rc, out, err) = self.execute_command(cmd)
@@ -1496,7 +1608,9 @@ class FreeBsdUser(User):
             cmd.append(self.comment)
 
         if self.home is not None:
-            if (info[5] != self.home and self.move_home) or (not os.path.exists(self.home) and self.create_home):
+            # Skip home creation for placeholder directories (e.g., /nonexistent, /dev/null)
+            # These are conventions for system accounts and should not be created on disk
+            if (info[5] != self.home and self.move_home) or (info[5] not in PLACEHOLDER_HOME_DIRS and not os.path.exists(self.home) and self.create_home):
                 cmd.append('-m')
             if info[5] != self.home:
                 cmd.append('-d')
@@ -1694,6 +1808,17 @@ class OpenBSDUser(User):
                 cmd.append('-K')
                 cmd.append('UMASK=' + self.umask)
 
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
+        if self.uid_min is not None:
+            cmd.append('-K')
+            cmd.append('UID_MIN=' + str(self.uid_min))
+
+        if self.uid_max is not None:
+            cmd.append('-K')
+            cmd.append('UID_MAX=' + str(self.uid_max))
+
         cmd.append(self.name)
         return self.execute_command(cmd)
 
@@ -1763,6 +1888,10 @@ class OpenBSDUser(User):
         if self.shell is not None and info[6] != self.shell:
             cmd.append('-s')
             cmd.append(self.shell)
+
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
 
         if self.login_class is not None:
             # find current login class
@@ -1860,6 +1989,10 @@ class NetBSDUser(User):
             cmd.append('-p')
             cmd.append(self.password)
 
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
+
         if self.create_home:
             cmd.append('-m')
 
@@ -1870,6 +2003,14 @@ class NetBSDUser(User):
             if self.umask is not None:
                 cmd.append('-K')
                 cmd.append('UMASK=' + self.umask)
+
+        if self.uid_min is not None:
+            cmd.append('-K')
+            cmd.append('UID_MIN=' + str(self.uid_min))
+
+        if self.uid_max is not None:
+            cmd.append('-K')
+            cmd.append('UID_MAX=' + str(self.uid_max))
 
         cmd.append(self.name)
         return self.execute_command(cmd)
@@ -1945,6 +2086,10 @@ class NetBSDUser(User):
         if self.login_class is not None:
             cmd.append('-L')
             cmd.append(self.login_class)
+
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
 
         if self.update_password == 'always' and self.password is not None and info[1] != self.password:
             cmd.append('-p')
@@ -2072,6 +2217,17 @@ class SunOS(User):
             cmd.append('-R')
             cmd.append(self.role)
 
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
+        if self.uid_min is not None:
+            cmd.append('-K')
+            cmd.append('UID_MIN=' + str(self.uid_min))
+
+        if self.uid_max is not None:
+            cmd.append('-K')
+            cmd.append('UID_MAX=' + str(self.uid_max))
+
         cmd.append(self.name)
 
         (rc, out, err) = self.execute_command(cmd)
@@ -2189,6 +2345,10 @@ class SunOS(User):
             cmd.append('-R')
             cmd.append(self.role)
 
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
+
         # modify the user if cmd will do anything
         if cmd_len != len(cmd):
             cmd.append(self.name)
@@ -2286,7 +2446,7 @@ class DarwinUser(User):
 
         super(DarwinUser, self).__init__(module)
 
-        # make the user hidden if option is set or deffer to system option
+        # make the user hidden if option is set or defer to system option
         if self.hidden is None:
             if self.system:
                 self.hidden = 1
@@ -2314,7 +2474,7 @@ class DarwinUser(User):
         return groups
 
     def _get_user_property(self, property):
-        '''Return user PROPERTY as given my dscl(1) read or None if not found.'''
+        """Return user PROPERTY as given my dscl(1) read or None if not found."""
         cmd = self._get_dscl()
         cmd += ['-read', '/Users/%s' % self.name, property]
         (rc, out, err) = self.execute_command(cmd, obey_checkmode=False)
@@ -2334,10 +2494,10 @@ class DarwinUser(User):
         return None
 
     def _get_next_uid(self, system=None):
-        '''
+        """
         Return the next available uid. If system=True, then
         uid should be below of 500, if possible.
-        '''
+        """
         cmd = self._get_dscl()
         cmd += ['-list', '/Users', 'UniqueID']
         (rc, out, err) = self.execute_command(cmd, obey_checkmode=False)
@@ -2363,16 +2523,15 @@ class DarwinUser(User):
         return max_uid + 1
 
     def _change_user_password(self):
-        '''Change password for SELF.NAME against SELF.PASSWORD.
+        """Change password for SELF.NAME against SELF.PASSWORD.
 
         Please note that password must be cleartext.
-        '''
+        """
         # some documentation on how is stored passwords on OSX:
-        # http://blog.lostpassword.com/2012/07/cracking-mac-os-x-lion-accounts-passwords/
         # http://null-byte.wonderhowto.com/how-to/hack-mac-os-x-lion-passwords-0130036/
         # http://pastebin.com/RYqxi7Ca
         # on OSX 10.8+ hash is SALTED-SHA512-PBKDF2
-        # https://pythonhosted.org/passlib/lib/passlib.hash.pbkdf2_digest.html
+        # https://passlib.readthedocs.io/en/stable/lib/passlib.hash.pbkdf2_digest.html
         # https://gist.github.com/nueh/8252572
         cmd = self._get_dscl()
         if self.password:
@@ -2385,7 +2544,7 @@ class DarwinUser(User):
         return (rc, out, err)
 
     def _make_group_numerical(self):
-        '''Convert SELF.GROUP to is stringed numerical value suitable for dscl.'''
+        """Convert SELF.GROUP to is stringed numerical value suitable for dscl."""
         if self.group is None:
             self.group = 'nogroup'
         try:
@@ -2396,8 +2555,8 @@ class DarwinUser(User):
         self.group = str(self.group)
 
     def __modify_group(self, group, action):
-        '''Add or remove SELF.NAME to or from GROUP depending on ACTION.
-        ACTION can be 'add' or 'remove' otherwise 'remove' is assumed. '''
+        """Add or remove SELF.NAME to or from GROUP depending on ACTION.
+        ACTION can be 'add' or 'remove' otherwise 'remove' is assumed. """
         if action == 'add':
             option = '-a'
         else:
@@ -2410,8 +2569,8 @@ class DarwinUser(User):
         return (rc, out, err)
 
     def _modify_group(self):
-        '''Add or remove SELF.NAME to or from GROUP depending on ACTION.
-        ACTION can be 'add' or 'remove' otherwise 'remove' is assumed. '''
+        """Add or remove SELF.NAME to or from GROUP depending on ACTION.
+        ACTION can be 'add' or 'remove' otherwise 'remove' is assumed. """
 
         rc = 0
         out = ''
@@ -2442,9 +2601,9 @@ class DarwinUser(User):
         return (rc, out, err, changed)
 
     def _update_system_user(self):
-        '''Hide or show user on login window according SELF.SYSTEM.
+        """Hide or show user on login window according SELF.SYSTEM.
 
-        Returns 0 if a change has been made, None otherwise.'''
+        Returns 0 if a change has been made, None otherwise."""
 
         plist_file = '/Library/Preferences/com.apple.loginwindow.plist'
 
@@ -2483,14 +2642,14 @@ class DarwinUser(User):
                 return 0
 
     def user_exists(self):
-        '''Check is SELF.NAME is a known user on the system.'''
+        """Check is SELF.NAME is a known user on the system."""
         cmd = self._get_dscl()
         cmd += ['-read', '/Users/%s' % self.name, 'UniqueID']
         (rc, out, err) = self.execute_command(cmd, obey_checkmode=False)
         return rc == 0
 
     def remove_user(self):
-        '''Delete SELF.NAME. If SELF.FORCE is true, remove its home directory.'''
+        """Delete SELF.NAME. If SELF.FORCE is true, remove its home directory."""
         info = self.user_info()
 
         cmd = self._get_dscl()
@@ -2674,6 +2833,17 @@ class AIX(User):
                 cmd.append('-K')
                 cmd.append('UMASK=' + self.umask)
 
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
+        if self.uid_min is not None:
+            cmd.append('-K')
+            cmd.append('UID_MIN=' + str(self.uid_min))
+
+        if self.uid_max is not None:
+            cmd.append('-K')
+            cmd.append('UID_MAX=' + str(self.uid_max))
+
         cmd.append(self.name)
         (rc, out, err) = self.execute_command(cmd)
 
@@ -2741,6 +2911,10 @@ class AIX(User):
         if self.shell is not None and info[6] != self.shell:
             cmd.append('-s')
             cmd.append(self.shell)
+
+        if self.inactive is not None:
+            cmd.append('-f')
+            cmd.append(self.inactive)
 
         # skip if no changes to be made
         if len(cmd) == 1:
@@ -2964,9 +3138,58 @@ class BusyBox(User):
         - remove_user()
         - modify_user()
     """
+    def _validate_shell(self):
+        if not self.shell:
+            return
+
+        try:
+            with open("/etc/shells", "r") as f:
+                shells = [
+                    shell
+                    for shell in (line.strip() for line in f)
+                    if shell
+                    and not shell.startswith("#")
+                ]
+        except FileNotFoundError:
+            return
+
+        if self.shell not in shells:
+            self.module.warn(f"'{self.shell}' is not listed as a valid shell on the remote host.")
+
+    def _build_password_string(self, current_password=None):
+        """
+        Build the appropriate password string based on the current password and
+        module parameters.
+
+        This method will return '*' at a minimum to avoid creating an enabled
+        account with no password.
+        """
+        lock = LOCK_INDICATOR if self.password_lock else ''
+
+        # Order of precedence when choosing the password:
+        #   1. password from module parameters
+        #   2. current password
+        #   3. string to enable the account but without a password
+        password = '*'
+        if self.password is not None:
+            password = self.password
+        elif current_password:
+            password = current_password
+            if current_password == LOCK_INDICATOR:
+                # Special handling when the password is only a '!' to avoid
+                # unnecessary changes to the password to values like '!!' or '!*'.
+                lock = ''
+            elif current_password.startswith(LOCK_INDICATOR):
+                # Preserve the existing password but unlock the account even if
+                # no password hash was provided in the module parameters.
+                password = current_password.lstrip(LOCK_INDICATOR)
+
+        return f'{lock}{password}'
 
     def create_user(self):
         cmd = [self.module.get_bin_path('adduser', True)]
+
+        self._validate_shell()
 
         cmd.append('-D')
 
@@ -2976,7 +3199,8 @@ class BusyBox(User):
 
         if self.group is not None:
             if not self.group_exists(self.group):
-                self.module.fail_json(msg='Group {0} does not exist'.format(self.group))
+                self.module.fail_json(msg=f'Group {self.group} does not exist')
+
             cmd.append('-G')
             cmd.append(self.group)
 
@@ -3006,6 +3230,14 @@ class BusyBox(User):
         if self.system:
             cmd.append('-S')
 
+        if self.uid_min is not None:
+            cmd.append('-K')
+            cmd.append('UID_MIN=' + str(self.uid_min))
+
+        if self.uid_max is not None:
+            cmd.append('-K')
+            cmd.append('UID_MAX=' + str(self.uid_max))
+
         cmd.append(self.name)
 
         rc, out, err = self.execute_command(cmd)
@@ -3013,18 +3245,17 @@ class BusyBox(User):
         if rc is not None and rc != 0:
             self.module.fail_json(name=self.name, msg=err, rc=rc)
 
-        if self.password is not None:
-            cmd = [self.module.get_bin_path('chpasswd', True)]
-            cmd.append('--encrypted')
-            data = '{name}:{password}'.format(name=self.name, password=self.password)
-            rc, out, err = self.execute_command(cmd, data=data)
+        cmd = [self.module.get_bin_path('chpasswd', True)]
+        cmd.append('--encrypted')
+        data = f'{self.name}:{self._build_password_string()}'
+        rc, out, err = self.execute_command(cmd, data=data)
 
-            if rc is not None and rc != 0:
-                self.module.fail_json(name=self.name, msg=err, rc=rc)
+        if rc is not None and rc != 0:
+            self.module.fail_json(name=self.name, msg=err, rc=rc)
 
         # Add to additional groups
-        if self.groups is not None and len(self.groups):
-            groups = self.get_groups_set()
+        if self.groups:
+            groups = self.get_groups_set() or set()
             add_cmd_bin = self.module.get_bin_path('adduser', True)
             for group in groups:
                 cmd = [add_cmd_bin, self.name, group]
@@ -3052,13 +3283,28 @@ class BusyBox(User):
         rc = None
         out = ''
         err = ''
-        info = self.user_info()
+        user_info = self.user_info()
+
+        if not user_info:
+            return rc, out, err
+
+        gid = user_info[3]
+        if self.group is not None:
+            if not self.group_exists(self.group):
+                self.module.fail_json(msg=f'Group {self.group} does not exist')
+
+            group_info = self.group_info(self.group)
+            if group_info:
+                gid = group_info[2]
+
         add_cmd_bin = self.module.get_bin_path('adduser', True)
         remove_cmd_bin = self.module.get_bin_path('delgroup', True)
 
+        self._validate_shell()
+
         # Manage group membership
-        if self.groups is not None and len(self.groups):
-            groups = self.get_groups_set()
+        if self.groups:
+            groups = self.get_groups_set() or set()
             group_diff = set(current_groups).symmetric_difference(groups)
 
             if group_diff:
@@ -3077,14 +3323,69 @@ class BusyBox(User):
                             self.module.fail_json(name=self.name, msg=err, rc=rc)
 
         # Manage password
-        if self.update_password == 'always' and self.password is not None and info[1] != self.password:
-            cmd = [self.module.get_bin_path('chpasswd', True)]
-            cmd.append('--encrypted')
-            data = '{name}:{password}'.format(name=self.name, password=self.password)
-            rc, out, err = self.execute_command(cmd, data=data)
+        current_password = to_native(user_info[1])
+        new_password = self._build_password_string(current_password)
+        if self.update_password == 'always':
+            lock_status_mismatch = self.password_lock and not current_password.startswith('!')
+            password_changed = new_password != current_password
+            if lock_status_mismatch or password_changed:
+                cmd = [self.module.get_bin_path('chpasswd', True), '--encrypted']
+                data = f'{self.name}:{new_password}'
+                rc, out, err = self.execute_command(cmd, data=data)
 
-            if rc is not None and rc != 0:
-                self.module.fail_json(name=self.name, msg=err, rc=rc)
+                if rc is not None and rc != 0:
+                    self.module.fail_json(name=self.name, msg=err, rc=rc)
+
+        # Move the home before rewriting /etc/passwd so usermod can still
+        # locate the current home directory contents.
+        if self.move_home and self.home is not None and user_info[5] != self.home:
+            usermod_bin = self.module.get_bin_path('usermod')
+            if usermod_bin is not None:
+                cmd = [usermod_bin, '-d', self.home, '-m', self.name]
+                rc, out, err = self.execute_command(cmd)
+                if rc is not None and rc != 0:
+                    self.module.fail_json(name=self.name, msg=err, rc=rc)
+
+                user_info = self.user_info()
+            else:
+                self.module.warn("usermod command not found, skipping home directory move")
+
+        # Manage user settings
+        uid = user_info[2]
+        if self.uid is not None:
+            uid = self.uid
+
+        passwd_entry = [
+            self.name,
+            'x',
+            to_native(uid),
+            to_native(gid),
+            self.comment or user_info[4],
+            self.home or user_info[5],
+            self.shell or user_info[6],
+        ]
+
+        contents = []
+        change = False
+        with open(self.PASSWORDFILE, 'r') as password_file:
+            for line in password_file:
+                if line.startswith('%s:' % self.name):
+                    fields = line.strip().split(':')
+                    if fields != passwd_entry:
+                        change = True
+                        line = ':'.join(passwd_entry) + '\n'
+
+                contents.append(line)
+
+        if change:
+            rc = 0
+            if not self.module.check_mode:
+                tmpfd, tmpfile = tempfile.mkstemp(dir=self.module.tmpdir)
+                with os.fdopen(tmpfd, 'w') as f:
+                    f.writelines(contents)
+
+                self.module.backup_local(self.PASSWORDFILE)
+                self.module.atomic_move(tmpfile, self.PASSWORDFILE)
 
         return rc, out, err
 
@@ -3096,6 +3397,11 @@ class Alpine(BusyBox):
     """
     platform = 'Linux'
     distribution = 'Alpine'
+
+
+class Buildroot(BusyBox):
+    platform = 'Linux'
+    distribution = 'Buildroot'
 
 
 def main():
@@ -3115,7 +3421,7 @@ def main():
             groups=dict(type='list', elements='str'),
             comment=dict(type='str'),
             home=dict(type='path'),
-            shell=dict(type='str'),
+            shell=dict(type='path'),
             password=dict(type='str', no_log=True),
             login_class=dict(type='str'),
             password_expire_max=dict(type='int', no_log=False),
@@ -3150,12 +3456,24 @@ def main():
             authorization=dict(type='str'),
             role=dict(type='str'),
             umask=dict(type='str'),
+            password_expire_account_disable=dict(type='int', no_log=False),
+            uid_min=dict(type='int'),
+            uid_max=dict(type='int'),
         ),
         supports_check_mode=True,
+        required_if=[
+            ['append', True, ['groups']],
+        ],
     )
 
     user = User(module)
     user.check_password_encrypted()
+
+    if user.seuser is not None and not module.selinux_enabled():
+        module.warn(
+            f"'seuser' is set to '{user.seuser}' but SELinux is not enabled on "
+            f"this system. The 'seuser' parameter will be ignored."
+        )
 
     module.debug('User instantiated - platform %s' % user.platform)
     if user.distribution:
@@ -3232,14 +3550,13 @@ def main():
         result['comment'] = info[4]
         result['home'] = info[5]
         result['shell'] = info[6]
-        if user.groups is not None:
-            result['groups'] = user.groups
+        result['groups'] = ','.join(user.user_group_membership())
 
         # handle missing homedirs
         info = user.user_info()
         if user.home is None:
             user.home = info[5]
-        if not os.path.exists(user.home) and user.create_home:
+        if not os.path.exists(user.home) and user.home not in PLACEHOLDER_HOME_DIRS and user.create_home:
             if not module.check_mode:
                 user.create_homedir(user.home)
                 user.chown_homedir(info[2], info[3], user.home)

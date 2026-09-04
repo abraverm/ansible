@@ -89,7 +89,7 @@ INVALID_SPECS = [
         {'numbers': [55, 33, 34, {'key': 'value'}]},
         {'numbers': [55, 33, 34]},
         set(),
-        "Elements value for option 'numbers' is of type <class 'dict'> and we were unable to convert to int: <class 'dict'> cannot be converted to an int"
+        "Elements value for option 'numbers' is of type dict and we were unable to convert to int"
     ),
     (
         'required',
@@ -112,7 +112,7 @@ INVALID_SPECS = [
 
 @pytest.mark.parametrize(
     ('arg_spec', 'parameters', 'expected', 'unsupported', 'error'),
-    (i[1:] for i in INVALID_SPECS),
+    [i[1:] for i in INVALID_SPECS],
     ids=[i[0] for i in INVALID_SPECS]
 )
 def test_invalid_spec(arg_spec, parameters, expected, unsupported, error):

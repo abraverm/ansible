@@ -13,7 +13,7 @@ set -eux
 # and don't dedupe before the role successfully completes
 [ "$(ansible-playbook role_complete.yml -i ../../inventory -i fake, --tags conditional_skipped | grep -c '"msg": "A"')" = "1" ]
 [ "$(ansible-playbook role_complete.yml -i ../../inventory -i fake, --tags conditional_failed | grep -c '"msg": "failed_when task succeeded"')" = "1" ]
-[ "$(ansible-playbook role_complete.yml -i ../../inventory -i fake, --tags unreachable -vvv | grep -c '"data": "reachable"')" = "1" ]
+[ "$(ANSIBLE_INJECT_INVOCATION=1 ansible-playbook role_complete.yml -i ../../inventory -i fake, --tags unreachable -vvv | grep -c '"data": "reachable"')" = "1" ]
 ansible-playbook role_complete.yml -i ../../inventory -i fake, --tags unreachable | grep -e 'ignored=2'
 
 # include/import can execute another instance of role
@@ -53,3 +53,14 @@ ansible-playbook role_dep_chain.yml -i ../../inventory "$@"
 ANSIBLE_PRIVATE_ROLE_VARS=1 ansible-playbook privacy.yml -e @vars/privacy_vars.yml "$@"
 ANSIBLE_PRIVATE_ROLE_VARS=0 ansible-playbook privacy.yml -e @vars/privacy_vars.yml "$@"
 ansible-playbook privacy.yml -e @vars/privacy_vars.yml "$@"
+
+for strategy in linear free; do
+  [ "$(ANSIBLE_STRATEGY=$strategy ansible-playbook -i testhost, end_role.yml | grep -c CHECKPOINT)" = "2" ]
+  [ "$(ANSIBLE_STRATEGY=$strategy ansible-playbook -i host1,host2 end_role_nested.yml | grep -c CHECKPOINT)" = "4" ]
+done
+
+[ "$(ansible localhost -m meta -a end_role 2>&1 | grep -c "\[ERROR\]: Cannot execute 'end_role' from outside of a role")" = "1" ]
+[ "$(ansible-playbook end_role_handler_error.yml 2>&1 | grep -c "\[ERROR\]: Cannot execute 'end_role' from a handler")" = "1" ]
+
+# include_role should work in rescue, even if error is from magic variable templating
+ansible-playbook 75240.yml -i ../../inventory "$@"

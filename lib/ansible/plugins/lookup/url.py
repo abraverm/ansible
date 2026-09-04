@@ -10,6 +10,7 @@ version_added: "1.9"
 short_description: return contents from URL
 description:
     - Returns the content of the URL requested to be used as data in play.
+positional: _terms
 options:
   _terms:
     description: urls to query
@@ -87,7 +88,6 @@ options:
         - section: url_lookup
           key: force_basic_auth
   follow_redirects:
-    description: String of urllib2, all/yes, safe, none to determine how redirects are followed
     type: string
     version_added: "2.10"
     default: 'urllib2'
@@ -98,13 +98,6 @@ options:
     ini:
         - section: url_lookup
           key: follow_redirects
-    choices:
-        - urllib2
-        - all
-        - 'yes'
-        - safe
-        - none
-        - 'no'
   use_gssapi:
     description:
     - Use GSSAPI handler of requests
@@ -172,7 +165,7 @@ options:
     description:
       - SSL/TLS Ciphers to use for the request
       - 'When a list is provided, all ciphers are joined in order with C(:)'
-      - See the L(OpenSSL Cipher List Format,https://www.openssl.org/docs/manmaster/man1/openssl-ciphers.html#CIPHER-LIST-FORMAT)
+      - See the L(OpenSSL Cipher List Format,https://docs.openssl.org/master/man1/openssl-ciphers/#cipher-list-format)
         for more details.
       - The available ciphers is dependent on the Python and OpenSSL/LibreSSL versions
     type: list
@@ -185,6 +178,8 @@ options:
     ini:
         - section: url_lookup
           key: ciphers
+extends_documentation_fragment:
+  - url.url_redirect
 """
 
 EXAMPLES = """
@@ -217,8 +212,8 @@ RETURN = """
 from urllib.error import HTTPError, URLError
 
 from ansible.errors import AnsibleError
-from ansible.module_utils.common.text.converters import to_text, to_native
-from ansible.module_utils.urls import open_url, ConnectionError, SSLValidationError
+from ansible.module_utils.common.text.converters import to_text
+from ansible.module_utils.urls import open_url, mask_url, ConnectionError, SSLValidationError
 from ansible.plugins.lookup import LookupBase
 from ansible.utils.display import Display
 
@@ -233,7 +228,7 @@ class LookupModule(LookupBase):
 
         ret = []
         for term in terms:
-            display.vvvv("url lookup connecting to %s" % term)
+            display.vvvv(f"url lookup connecting to {mask_url(term)}")
             try:
                 response = open_url(
                     term, validate_certs=self.get_option('validate_certs'),
@@ -254,13 +249,13 @@ class LookupModule(LookupBase):
                     use_netrc=self.get_option('use_netrc')
                 )
             except HTTPError as e:
-                raise AnsibleError("Received HTTP error for %s : %s" % (term, to_native(e)))
+                raise AnsibleError(f"Received HTTP error for {mask_url(term)}") from e
             except URLError as e:
-                raise AnsibleError("Failed lookup url for %s : %s" % (term, to_native(e)))
+                raise AnsibleError(f"Failed lookup url for {mask_url(term)}") from e
             except SSLValidationError as e:
-                raise AnsibleError("Error validating the server's certificate for %s: %s" % (term, to_native(e)))
+                raise AnsibleError(f"Error validating the server's certificate for {mask_url(term)}") from e
             except ConnectionError as e:
-                raise AnsibleError("Error connecting to %s: %s" % (term, to_native(e)))
+                raise AnsibleError(f"Error connecting to {mask_url(term)}") from e
 
             if self.get_option('split_lines'):
                 for line in response.read().splitlines():

@@ -17,8 +17,6 @@
 
 from __future__ import annotations
 
-import os
-
 import unittest
 from unittest.mock import MagicMock, Mock
 from ansible.plugins.action.raw import ActionModule
@@ -31,7 +29,7 @@ class TestCopyResultExclude(unittest.TestCase):
     def setUp(self):
         self.play_context = Mock()
         self.play_context.shell = 'sh'
-        self.connection = connection_loader.get('local', self.play_context, os.devnull)
+        self.connection = connection_loader.get('local', self.play_context)
 
     def tearDown(self):
         pass
@@ -46,8 +44,8 @@ class TestCopyResultExclude(unittest.TestCase):
         task.args = {'_raw_params': 'Args1'}
 
         return task
-    # The current behavior of the raw aciton in regards to executable is currently in question;
-    # the test_raw_executable_is_not_empty_string verifies the current behavior (whether it is desireed or not.
+    # The current behavior of the raw action in regards to executable is currently in question;
+    # the test_raw_executable_is_not_empty_string verifies the current behavior (whether it is desired or not).
     # Please refer to the following for context:
     # Issue: https://github.com/ansible/ansible/issues/16054
     # PR: https://github.com/ansible/ansible/pull/16085

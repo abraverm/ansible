@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 
-DOCUMENTATION = r'''
+DOCUMENTATION = r"""
 ---
 module: getent
 short_description: A wrapper to the unix getent utility
@@ -36,6 +36,7 @@ options:
         description:
             - Character used to split the database values into lists/arrays such as V(:) or V(\\t),
               otherwise it will try to pick one depending on the database.
+            - The value must be a non-empty string.
         type: str
     fail_key:
         description:
@@ -58,9 +59,9 @@ notes:
    - Not all databases support enumeration, check system documentation for details.
 author:
 - Brian Coca (@bcoca)
-'''
+"""
 
-EXAMPLES = '''
+EXAMPLES = """
 - name: Get root user info
   ansible.builtin.getent:
     database: passwd
@@ -97,9 +98,9 @@ EXAMPLES = '''
 - ansible.builtin.debug:
     var: ansible_facts.getent_shadow
 
-'''
+"""
 
-RETURN = '''
+RETURN = """
 ansible_facts:
   description: Facts to add to ansible_facts.
   returned: always
@@ -112,10 +113,9 @@ ansible_facts:
         - Starting at 2.11 it now returns multiple duplicate entries, previously it only returned the last one
       returned: always
       type: list
-'''
+"""
 
-import traceback
-
+import platform
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.common.text.converters import to_native
 
@@ -148,7 +148,12 @@ def main():
         cmd = [getent_bin, database]
 
     if service is not None:
+        if platform.libc_ver()[0] not in ('glibc',):
+            module.fail_json(msg=f"Specifying service `{service}` not supported on this platform.")
         cmd.extend(['-s', service])
+
+    if not split and split is not None:
+        module.fail_json(msg="Invalid split value. The value must be a non-empty string")
 
     if split is None and database in colon:
         split = ':'
@@ -156,7 +161,7 @@ def main():
     try:
         rc, out, err = module.run_command(cmd)
     except Exception as e:
-        module.fail_json(msg=to_native(e), exception=traceback.format_exc())
+        module.fail_json(msg=to_native(e))
 
     msg = "Unexpected failure!"
     dbtree = 'getent_%s' % database

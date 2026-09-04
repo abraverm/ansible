@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 
-DOCUMENTATION = '''
+DOCUMENTATION = """
 ---
 module: tempfile
 version_added: "2.3"
@@ -53,7 +53,9 @@ seealso:
 - module: ansible.windows.win_tempfile
 author:
   - Krzysztof Magosa (@krzysztof-magosa)
-'''
+notes:
+  - O(prefix) and O(suffix) must be file name components and must not contain path separators.
+"""
 
 EXAMPLES = """
 - name: Create temporary build directory
@@ -80,17 +82,16 @@ EXAMPLES = """
   when: tempfile_1.path is defined
 """
 
-RETURN = '''
+RETURN = """
 path:
   description: Path to created file or directory.
   returned: success
   type: str
   sample: "/tmp/ansible.bMlvdk"
-'''
+"""
 
-from os import close
+import os
 from tempfile import mkstemp, mkdtemp
-from traceback import format_exc
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.common.text.converters import to_native
@@ -106,24 +107,32 @@ def main():
         ),
     )
 
+    prefix = module.params['prefix']
+    suffix = module.params['suffix']
+
+    if prefix and prefix != os.path.basename(prefix):
+        module.fail_json(msg=f"prefix must be a valid file name component, got {prefix!r}")
+    if suffix and suffix != os.path.basename(suffix):
+        module.fail_json(msg=f"suffix must be a valid file name component, got {suffix!r}")
+
     try:
         if module.params['state'] == 'file':
             handle, path = mkstemp(
-                prefix=module.params['prefix'],
-                suffix=module.params['suffix'],
+                prefix=prefix,
+                suffix=suffix,
                 dir=module.params['path'],
             )
-            close(handle)
+            os.close(handle)
         else:
             path = mkdtemp(
-                prefix=module.params['prefix'],
-                suffix=module.params['suffix'],
+                prefix=prefix,
+                suffix=suffix,
                 dir=module.params['path'],
             )
 
         module.exit_json(changed=True, path=path)
     except Exception as e:
-        module.fail_json(msg=to_native(e), exception=format_exc())
+        module.fail_json(msg=to_native(e))
 
 
 if __name__ == '__main__':

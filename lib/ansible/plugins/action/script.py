@@ -17,10 +17,13 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import re
 import shlex
+import typing as _t
 
-from ansible.errors import AnsibleError, AnsibleAction, _AnsibleActionDone, AnsibleActionFail, AnsibleActionSkip
+from ansible._internal._powershell import _script as _ps_script
+from ansible.errors import AnsibleError, AnsibleActionFail
 from ansible.executor.powershell import module_manifest as ps_manifest
 from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
 from ansible.plugins.action import ActionBase
@@ -34,8 +37,8 @@ class ActionModule(ActionBase):
     # after chopping off a potential drive letter.
     windows_absolute_path_detection = re.compile(r'^(?:[a-zA-Z]\:)?(\\|\/)')
 
-    def run(self, tmp=None, task_vars=None):
-        ''' handler for file transfer operations '''
+    def run(self, tmp: str | None = None, task_vars: dict[str, _t.Any] | None = None) -> dict[str, _t.Any]:
+        """ handler for file transfer operations """
         if task_vars is None:
             task_vars = dict()
 
@@ -48,12 +51,11 @@ class ActionModule(ActionBase):
                 'chdir': {'type': 'str'},
                 'executable': {'type': 'str'},
             },
-            required_one_of=[
-                ['_raw_params', 'cmd']
-            ]
+            required_one_of=[['_raw_params', 'cmd']],
+            mutually_exclusive=[['_raw_params', 'cmd']],
         )
 
-        result = super(ActionModule, self).run(tmp, task_vars)
+        super(ActionModule, self).run(tmp, task_vars)
         del tmp  # tmp no longer has any effect
 
         try:
@@ -63,7 +65,11 @@ class ActionModule(ActionBase):
                 # and the filename already exists. This allows idempotence
                 # of command executions.
                 if self._remote_file_exists(creates):
-                    raise AnsibleActionSkip("%s exists, matching creates option" % creates)
+                    return dict(
+                        changed=False,
+                        skipped=True,  # deprecated: description='remove this skipped return', core_version='2.25'
+                        msg=f'{creates} exists, matching creates option',
+                    )
 
             removes = new_module_args['removes']
             if removes:
@@ -71,7 +77,11 @@ class ActionModule(ActionBase):
                 # and the filename does not exist. This allows idempotence
                 # of command executions.
                 if not self._remote_file_exists(removes):
-                    raise AnsibleActionSkip("%s does not exist, matching removes option" % removes)
+                    return dict(
+                        changed=False,
+                        skipped=True,  # deprecated: description='remove this skipped return', core_version='2.25'
+                        msg=f'{removes} does not exist, matching removes option',
+                    )
 
             # The chdir must be absolute, because a relative path would rely on
             # remote node behaviour & user config.
@@ -88,7 +98,7 @@ class ActionModule(ActionBase):
             # Split out the script as the first item in raw_params using
             # shlex.split() in order to support paths and files with spaces in the name.
             # Any arguments passed to the script will be added back later.
-            raw_params = to_native(new_module_args.get('_raw_params', ''), errors='surrogate_or_strict')
+            raw_params = new_module_args['_raw_params'] or new_module_args['cmd']
             parts = [to_text(s, errors='surrogate_or_strict') for s in shlex.split(raw_params.strip())]
             source = parts[0]
 
@@ -97,7 +107,7 @@ class ActionModule(ActionBase):
             if executable:
                 executable = to_native(new_module_args['executable'], errors='surrogate_or_strict')
             try:
-                source = self._loader.get_real_file(self._find_needle('files', source), decrypt=self._task.args.get('decrypt', True))
+                source = self._loader.get_real_file(self._find_needle('files', source))
             except AnsibleError as e:
                 raise AnsibleActionFail(to_native(e))
 
@@ -105,16 +115,15 @@ class ActionModule(ActionBase):
                 # check mode is supported if 'creates' or 'removes' are provided
                 # the task has already been skipped if a change would not occur
                 if new_module_args['creates'] or new_module_args['removes']:
-                    result['changed'] = True
-                    raise _AnsibleActionDone(result=result)
+                    return dict(changed=True)
                 # If the script doesn't return changed in the result, it defaults to True,
                 # but since the script may override 'changed', just skip instead of guessing.
                 else:
-                    result['changed'] = False
-                    raise AnsibleActionSkip('Check mode is not supported for this task.', result=result)
-
-            # now we execute script, always assume changed.
-            result['changed'] = True
+                    return dict(
+                        msg='Check mode is not supported for this task.',
+                        changed=False,
+                        skipped=True,  # deprecated: description='remove this skipped return', core_version='2.25'
+                    )
 
             # transfer the file to a remote tmp location
             tmp_src = self._connection._shell.join_path(self._connection._shell.tmpdir,
@@ -135,7 +144,7 @@ class ActionModule(ActionBase):
             self._fixup_perms2((self._connection._shell.tmpdir, tmp_src), execute=True)
 
             # add preparation steps to one ssh roundtrip executing the script
-            env_dict = dict()
+            env_dict: dict[str, _t.Any] = {}
             env_string = self._compute_environment_string(env_dict)
 
             if executable:
@@ -143,32 +152,33 @@ class ActionModule(ActionBase):
             else:
                 script_cmd = ' '.join([env_string, target_command])
 
-            script_cmd = self._connection._shell.wrap_for_exec(script_cmd)
-
             exec_data = None
             # PowerShell runs the script in a special wrapper to enable things
             # like become and environment args
             if getattr(self._connection._shell, "_IS_WINDOWS", False):
                 # FUTURE: use a more public method to get the exec payload
-                pc = self._task
                 exec_data = ps_manifest._create_powershell_wrapper(
-                    to_bytes(script_cmd), source, {}, env_dict, self._task.async_val,
-                    pc.become, pc.become_method, pc.become_user,
-                    self._play_context.become_pass, pc.become_flags, "script", task_vars, None
+                    name=f"ansible.builtin.script.{pathlib.Path(source).stem}",
+                    module_data=to_bytes(f"& {script_cmd}; exit $LASTEXITCODE"),
+                    module_path=source,
+                    module_args={},
+                    environment=env_dict,
+                    async_timeout=self._task.async_val,
+                    become_plugin=self._connection.become,
+                    substyle="script",
+                    task_vars=task_vars,
+                    profile='legacy',  # the profile doesn't really matter since the module args dict is empty
                 )
-                # build the necessary exec wrapper command
-                # FUTURE: this still doesn't let script work on Windows with non-pipelined connections or
-                # full manual exec of KEEP_REMOTE_FILES
-                script_cmd = self._connection._shell.build_module_command(env_string='', shebang='#!powershell', cmd='')
+                bootstrap_wrapper = ps_manifest._get_powershell_script("bootstrap_wrapper.ps1").decode('utf-8')
+                pwsh_args = _ps_script.get_pwsh_encoded_cmdline(bootstrap_wrapper, override_execution_policy=True)
+                script_cmd = self._connection._shell.join(pwsh_args)
 
-            result.update(self._low_level_execute_command(cmd=script_cmd, in_data=exec_data, sudoable=True, chdir=chdir))
+            # now we execute script, always assume changed.
+            result: dict[str, object] = dict(self._low_level_execute_command(cmd=script_cmd, in_data=exec_data, sudoable=True, chdir=chdir), changed=True)
 
             if 'rc' in result and result['rc'] != 0:
-                raise AnsibleActionFail('non-zero return code')
+                result.update(msg='non-zero return code', failed=True)
 
-        except AnsibleAction as e:
-            result.update(e.result)
+            return result
         finally:
             self._remove_tmp_path(self._connection._shell.tmpdir)
-
-        return result

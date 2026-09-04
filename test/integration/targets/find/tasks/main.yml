@@ -210,8 +210,24 @@
       that:
           - fail_to_read_wrong_encoding_file.msg == 'Not all paths examined, check warnings for details'
           - >-
-              fail_to_read_wrong_encoding_file.skipped_paths[remote_tmp_dir_test] == 
-              ("Failed to read the file %s/hello_world.gbk due to an encoding error. current encoding: utf-8" % (remote_tmp_dir_test))
+              fail_to_read_wrong_encoding_file.skipped_paths[remote_tmp_dir_test] ==
+              ("Failed to decode the file '%s/hello_world.gbk' with encoding: utf-8" % (remote_tmp_dir_test))
+
+- name: read a gbk file with no encoding specified (uses locale default)
+  find:
+    paths: "{{ remote_tmp_dir_test }}"
+    patterns: "*.gbk"
+    contains: "你好世界"
+  register: fail_to_read_default_encoding
+
+- name: Verify error message shows locale encoding name
+  vars:
+    error_pattern: 'Failed to decode the file .+ with encoding: .+ \(Python default\)'
+  assert:
+    that:
+      - fail_to_read_default_encoding.msg == 'Not all paths examined, check warnings for details'
+      - fail_to_read_default_encoding.skipped_paths[remote_tmp_dir_test] is search("^" + error_pattern + "$")
+      - fail_to_read_default_encoding.warnings | select('search', error_pattern) | list | length >= 1
 
 - name: read a gbk file by gbk
   find:
@@ -226,6 +242,29 @@
 - assert:
       that:
           - success_to_read_right_encoding_file.matched == 1
+
+- name: specify the checksum_algo
+  register: find_by_specific_algo_res
+  find:
+    paths: "{{ remote_tmp_dir_test }}"
+    get_checksum: true
+    checksum_algorithm: md5
+
+- debug: var=find_by_specific_algo_res
+
+- name: get the md5 checksum by stat
+  register: all_files_st
+  stat:
+    get_checksum: true
+    checksum_algorithm: md5
+    path: "{{ item.path }}"
+  loop: "{{ find_by_specific_algo_res.files }}"
+
+- assert:
+      that: "all_files_st.results[index].stat.checksum == item.checksum"
+  loop: "{{ find_by_specific_algo_res.files }}"
+  loop_control:
+    index_var: index
 
 - name: read a gbk file by non-exists encoding
   find:
@@ -313,7 +352,7 @@
 - name: assert we skipped the ogg file
   assert:
     that:
-      - '"{{ remote_tmp_dir_test }}/e/f/g/h/8.ogg" not in find_test3_list'
+      - remote_tmp_dir_test + "/e/f/g/h/8.ogg" not in find_test3_list
 
 - name: patterns with regex
   find:
@@ -363,7 +402,7 @@
   assert:
     that:
       - result.matched == 1
-      - '"{{ remote_tmp_dir_test }}/astest/old.txt" in astest_list'
+      - remote_tmp_dir_test + "/astest/old.txt" in astest_list
 
 - name: find files newer than 1 week
   find:
@@ -378,7 +417,7 @@
   assert:
     that:
       - result.matched == 1
-      - '"{{ remote_tmp_dir_test }}/astest/new.txt" in astest_list'
+      - remote_tmp_dir_test + "/astest/new.txt" in astest_list
 
 - name: add some content to the new file
   shell: "echo hello world > {{ remote_tmp_dir_test }}/astest/new.txt"
@@ -398,7 +437,7 @@
   assert:
     that:
       - result.matched == 1
-      - '"{{ remote_tmp_dir_test }}/astest/new.txt" in astest_list'
+      - remote_tmp_dir_test + "/astest/new.txt" in astest_list
       - '"checksum" in result.files[0]'
 
 - name: find ANY item with LESS than 5 bytes, also get checksums
@@ -417,8 +456,8 @@
   assert:
     that:
       - result.matched == 2
-      - '"{{ remote_tmp_dir_test }}/astest/old.txt" in astest_list'
-      - '"{{ remote_tmp_dir_test }}/astest/.hidden.txt" in astest_list'
+      - remote_tmp_dir_test + "/astest/old.txt" in astest_list
+      - remote_tmp_dir_test + "/astest/.hidden.txt" in astest_list
       - '"checksum" in result.files[0]'
 
 # Test permission error is correctly handled by find module
@@ -468,8 +507,8 @@
           - permission_issue is success
           - not permission_issue.changed
           - permission_issue.skipped_paths|length == 1
-          - "'{{ test_dir }}/readable/1-unreadable' in permission_issue.skipped_paths"
-          - "'Permission denied' in permission_issue.skipped_paths['{{ test_dir }}/readable/1-unreadable']"
+          - (test_dir + '/readable/1-unreadable') in permission_issue.skipped_paths
+          - "'Permission denied' in permission_issue.skipped_paths[test_dir + '/readable/1-unreadable']"
           - permission_issue.matched == 1
   always:
     - name: cleanup test directory
@@ -479,3 +518,31 @@
 
 - name: Run mode tests
   import_tasks: mode.yml
+
+- name: User block
+  become: true
+  become_user: "{{ test_user_name }}"
+  block:
+    - name: Create file in home dir
+      copy:
+        content: ""
+        dest: ~/wharevs.txt
+        mode: '0644'
+
+    - name: Find file in home dir with ~/
+      find:
+        paths: ~/
+        patterns: 'whar*'
+      register: homedir_search
+
+    - set_fact:
+        astest_list: "{{ homedir_search.files | map(attribute='path') }}"
+
+    - name: Check if found
+      assert:
+        that:
+          - homedir_search is success
+          - homedir_search.matched == 1
+          - (homedir + '/wharevs.txt') in astest_list
+      vars:
+        homedir: "{{ test_user.home }}"

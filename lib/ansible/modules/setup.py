@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 
-DOCUMENTATION = '''
+DOCUMENTATION = """
 ---
 module: setup
 version_added: historical
@@ -18,7 +18,7 @@ options:
             - "If supplied, restrict the additional facts collected to the given subset.
               Possible values: V(all), V(all_ipv4_addresses), V(all_ipv6_addresses), V(apparmor), V(architecture),
               V(caps), V(chroot),V(cmdline), V(date_time), V(default_ipv4), V(default_ipv6), V(devices),
-              V(distribution), V(distribution_major_version), V(distribution_release), V(distribution_version),
+              V(distribution), V(distribution_cpe_name), V(distribution_major_version), V(distribution_release), V(distribution_version),
               V(dns), V(effective_group_ids), V(effective_user_id), V(env), V(facter), V(fips), V(hardware),
               V(interfaces), V(is_chroot), V(iscsi), V(kernel), V(local), V(lsb), V(machine), V(machine_id),
               V(mounts), V(network), V(ohai), V(os_family), V(pkg_mgr), V(platform), V(processor), V(processor_cores),
@@ -27,8 +27,8 @@ options:
               V(ssh_host_key_rsa_public), V(ssh_host_pub_keys), V(ssh_pub_keys), V(system), V(system_capabilities),
               V(system_capabilities_enforced), V(systemd), V(user), V(user_dir), V(user_gecos), V(user_gid), V(user_id),
               V(user_shell), V(user_uid), V(virtual), V(virtualization_role), V(virtualization_type).
-             Can specify a list of values to specify a larger subset.
-             Values can also be used with an initial C(!) to specify that
+              Can specify a list of values to specify a larger subset.
+              Values can also be used with an initial C(!) to specify that
               that specific subset should not be collected.  For instance:
               V(!hardware,!network,!virtual,!ohai,!facter). If V(!all) is specified
               then only the min subset is collected. To avoid collecting even the
@@ -110,7 +110,7 @@ notes:
 author:
     - "Ansible Core Team"
     - "Michael DeHaan"
-'''
+"""
 
 EXAMPLES = r"""
 # Display facts from all hosts and store them indexed by `hostname` at `/tmp/facts`.

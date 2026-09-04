@@ -4,16 +4,15 @@
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 
 import pytest
 
 from unittest.mock import patch, MagicMock
-from ansible.module_utils.common.text.converters import to_bytes
 
 from ansible.module_utils import basic
+from ansible.module_utils.testing import patch_module_args
 
 
 class TestAnsibleModuleTmpDir:
@@ -57,27 +56,23 @@ class TestAnsibleModuleTmpDir:
         ),
     )
 
-    # pylint bug: https://github.com/PyCQA/pylint/issues/511
-    # pylint: disable=undefined-variable
-    @pytest.mark.parametrize('args, expected, stat_exists', ((s, e, t) for s, t, e in DATA))
+    @pytest.mark.parametrize('args, expected, stat_exists', [(s, e, t) for s, t, e in DATA])
     def test_tmpdir_property(self, monkeypatch, args, expected, stat_exists):
-        makedirs = {'called': False}
+        makedirs_calls = []
 
         def mock_mkdtemp(prefix, dir):
             return os.path.join(dir, prefix)
 
-        def mock_makedirs(path, mode):
-            makedirs['called'] = True
-            makedirs['path'] = path
-            makedirs['mode'] = mode
+        def mock_makedirs(path, mode, exist_ok=False):
+            makedirs_calls.append({'path': path, 'mode': mode})
             return
 
         monkeypatch.setattr(tempfile, 'mkdtemp', mock_mkdtemp)
         monkeypatch.setattr(os.path, 'exists', lambda x: stat_exists)
         monkeypatch.setattr(os, 'makedirs', mock_makedirs)
-        monkeypatch.setattr(basic, '_ANSIBLE_ARGS', to_bytes(json.dumps({'ANSIBLE_MODULE_ARGS': args})))
 
-        with patch('time.time', return_value=42):
+        with patch_module_args(args), \
+             patch('time.time', return_value=42):
             am = basic.AnsibleModule(argument_spec={})
             actual_tmpdir = am.tmpdir
 
@@ -87,10 +82,10 @@ class TestAnsibleModuleTmpDir:
         assert am.tmpdir == actual_tmpdir
 
         if not stat_exists:
-            assert makedirs['called']
             expected = os.path.expanduser(os.path.expandvars(am._remote_tmp))
-            assert makedirs['path'] == expected
-            assert makedirs['mode'] == 0o700
+            tmpdir_calls = [c for c in makedirs_calls if c['path'] == expected]
+            assert len(tmpdir_calls) == 1
+            assert tmpdir_calls[0]['mode'] == 0o700
 
     @pytest.mark.parametrize('stdin', ({"_ansible_tmpdir": None,
                                         "_ansible_remote_tmp": "$HOME/.test",
@@ -104,6 +99,9 @@ class TestAnsibleModuleTmpDir:
         monkeypatch.setattr(tempfile, 'mkdtemp', mock_mkdtemp)
         monkeypatch.setattr(os.path, 'exists', lambda x: False)
         monkeypatch.setattr(os, 'makedirs', mock_makedirs)
+
+        # Reset cached tmpdir so the property re-evaluates with mocked makedirs
+        am._tmpdir = None
 
         actual = am.tmpdir
         assert actual == "/tmp/path"

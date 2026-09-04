@@ -100,6 +100,19 @@
     - "{{fail_checksum.results}}"
     - "{{fail.results}}"
 
+- name: Request IncompleteRead from localhost
+  uri:
+    return_content: yes
+    url: http://localhost:{{ http_port }}/chunked
+  register: r
+  ignore_errors: true
+
+- name: Check if IncompleteRead raises error
+  assert:
+    that:
+      - r.failed
+      - "'HTTP Error while fetching' in r.msg"
+
 - name: test https fetch to a site with mismatched hostname and certificate
   uri:
     url: "https://{{ badssl_host }}/"
@@ -189,11 +202,11 @@
   stat:
     path: '{{ item }}'
   loop:
+    - '{{ cafile_path.stdout_lines|default(["/_i_dont_exist_ca.pem"])|first }}'
     - /etc/ssl/certs/ca-bundle.crt
     - /etc/ssl/certs/ca-certificates.crt
     - /var/lib/ca-certificates/ca-bundle.pem
     - /usr/local/share/certs/ca-root-nss.crt
-    - '{{ cafile_path.stdout_lines|default(["/_i_dont_exist_ca.pem"])|first }}'
     - /etc/ssl/cert.pem
   register: ca_bundle_candidates
 
@@ -214,7 +227,7 @@
 - name: Assert location header
   assert:
     that:
-      - 'result.location|default("") == "https://{{ httpbin_host }}/relative-redirect/1"'
+      - 'result.location|default("") == "https://" + httpbin_host + "/relative-redirect/1"'
 
 - name: Check SSL with redirect
   uri:
@@ -224,7 +237,7 @@
 - name: Assert SSL with redirect
   assert:
     that:
-      - 'result.url|default("") == "https://{{ httpbin_host }}/get"'
+      - 'result.url|default("") == "https://" + httpbin_host + "/get"'
 
 - name: redirect to bad SSL site
   uri:
@@ -232,7 +245,7 @@
   register: result
   ignore_errors: true
 
-- name: Ensure bad SSL site reidrect fails
+- name: Ensure bad SSL site redirect fails
   assert:
     that:
       - result is failed
@@ -431,10 +444,16 @@
     body:
       file1:
         filename: formdata.txt
+        multipart_encoding: base64
       file2:
         content: text based file content
         filename: fake.txt
         mime_type: text/plain
+      file3:
+        filename: formdata.txt
+        multipart_encoding: '7or8bit'
+      file4:
+        filename: formdata.txt
       text_form_field1: value1
       text_form_field2:
         content: value2
@@ -444,8 +463,10 @@
 - name: Assert multipart/form-data
   assert:
     that:
-      - multipart.json.files.file1 == '_multipart/form-data_\n'
+      - multipart.json.files.file1 | b64decode == '_multipart/form-data_\n'
       - multipart.json.files.file2 == 'text based file content'
+      - multipart.json.files.file3 == '_multipart/form-data_\n'
+      - multipart.json.files.file4 == '_multipart/form-data_\n'
       - multipart.json.form.text_form_field1 == 'value1'
       - multipart.json.form.text_form_field2 == 'value2'
 
@@ -458,7 +479,26 @@
     body:
       integer_value: 1
   register: multipart_invalid
-  failed_when: 'multipart_invalid.msg != "failed to parse body as form-multipart: value must be a string, or mapping, cannot be type int"'
+  failed_when: '"failed to parse body as form-multipart: value must be a string, or mapping, cannot be type" not in multipart_invalid.msg'
+
+- name: multipart/form-data with file and retry
+  uri:
+    url: https://{{ httpbin_host }}/post
+    method: POST
+    body_format: form-multipart
+    body:
+      file:
+        filename: formdata.txt
+  retries: 1
+  delay: 0.01
+  register: result
+  failed_when: result is failed or result.attempts == 1
+
+- name: Assert multipart/form-data with file and retry
+  assert:
+    that:
+      - result.json.files.file == '_multipart/form-data_\n'
+      - result.attempts == 2
 
 - name: Validate invalid method
   uri:
@@ -602,7 +642,7 @@
 - name: assert that keys were sanitized
   assert:
     that:
-      - sanitize_keys.json.args['key-********'] == 'value-********'
+    - sanitize_keys.json.args['key-********'] == 'value-********'
 
 - name: Test gzip encoding
   uri:
@@ -720,6 +760,7 @@
 
 - name: Test ciphers
   import_tasks: ciphers.yml
+  when: false  # skipped until we have a way to disable TLS 1.3 on the client or server, since cipher suite selection won't break TLS 1.3
 
 - name: Test use_netrc.yml
   import_tasks: use_netrc.yml
@@ -737,3 +778,15 @@
   assert:
     that:
       - uri_check.msg == "This action (uri) does not support check mode."
+
+- name: Test auth fail downloading to dir
+  uri:
+    url: 'https://secretuser:secretpassword@{{ httpbin_host }}/nonexistant'
+    dest: "{{ remote_tmp_dir }}"
+  ignore_errors: true
+  register: auth_error
+
+- name: Ensure secret is not visible
+  assert:
+    that:
+      - "'secret' not in auth_error|to_json"

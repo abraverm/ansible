@@ -1,4 +1,5 @@
 """Classify changes in Ansible code."""
+
 from __future__ import annotations
 
 import collections
@@ -533,13 +534,6 @@ class PathMapper:
                     'units': units_path,
                 }
 
-            if name == 'paramiko_ssh':
-                return {
-                    'integration': integration_name,
-                    'network-integration': self.integration_all_target,
-                    'units': units_path,
-                }
-
             # other connection plugins have isolated integration and unit tests
 
             return {
@@ -716,6 +710,9 @@ class PathMapper:
         if path.startswith('changelogs/'):
             return minimal
 
+        if path.startswith('context/'):
+            return minimal
+
         if path.startswith('hacking/'):
             return minimal
 
@@ -834,8 +831,6 @@ class PathMapper:
                 'MANIFEST.in',
                 'pyproject.toml',
                 'requirements.txt',
-                'setup.cfg',
-                'setup.py',
             ):
                 return packaging
 

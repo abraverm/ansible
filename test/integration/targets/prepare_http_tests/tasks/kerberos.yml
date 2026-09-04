@@ -8,7 +8,7 @@
     # https://github.com/heimdal/heimdal/issues/1224
     krb5_openssl_conf: >-
       {{
-        (ansible_facts.os_family == "FreeBSD" and ansible_facts.distribution_major_version == "14") | ternary(
+        (ansible_facts.os_family == "FreeBSD" and ansible_facts.distribution_major_version in ["14", "15"]) | ternary(
           remote_tmp_dir ~ "/openssl_legacy.cnf",
           ""
         )
@@ -26,7 +26,7 @@
   copy:
     src: openssl_legacy.cnf
     dest: '{{ krb5_openssl_conf }}'
-  when: krb5_openssl_conf | default(False, True)
+  when: krb5_openssl_conf is defined and krb5_openssl_conf is truthy
 
 - name: Include distribution specific variables
   include_vars: '{{ lookup("first_found", params) }}'
@@ -41,7 +41,7 @@
       paths:
       - '{{ role_path }}/vars'
 
-- name: Install Kerberos sytem packages
+- name: Install Kerberos system packages
   package:
     name: '{{ krb5_packages }}'
     state: present

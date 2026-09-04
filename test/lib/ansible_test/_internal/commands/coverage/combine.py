@@ -1,4 +1,5 @@
 """Combine code coverage files."""
+
 from __future__ import annotations
 
 import collections.abc as c
@@ -20,12 +21,14 @@ from ...util import (
     display,
     ApplicationError,
     raw_command,
+    common_environment,
 )
 
 from ...util_common import (
     ResultType,
     write_json_file,
     write_json_test_results,
+    get_powershell_injector_env,
 )
 
 from ...executor import (
@@ -61,8 +64,6 @@ from . import (
     CoverageConfig,
     PathChecker,
 )
-
-TValue = t.TypeVar('TValue')
 
 
 def command_coverage_combine(args: CoverageCombineConfig) -> None:
@@ -198,10 +199,13 @@ def _command_coverage_combine_powershell(args: CoverageCombineConfig) -> list[st
     coverage_files = get_powershell_coverage_files()
 
     def _default_stub_value(source_paths: list[str]) -> dict[str, dict[int, int]]:
+        env = common_environment()
+        env.update(get_powershell_injector_env(args.controller_powershell, env))
+
         cmd = ['pwsh', os.path.join(ANSIBLE_TEST_TOOLS_ROOT, 'coverage_stub.ps1')]
         cmd.extend(source_paths)
 
-        stubs = json.loads(raw_command(cmd, capture=True)[0])
+        stubs = json.loads(raw_command(cmd, env=env, capture=True)[0])
 
         return dict((d['Path'], dict((line, 0) for line in d['Lines'])) for d in stubs)
 
@@ -286,7 +290,7 @@ def _get_coverage_targets(args: CoverageCombineConfig, walk_func: c.Callable) ->
     return sources
 
 
-def _build_stub_groups(
+def _build_stub_groups[TValue](
     args: CoverageCombineConfig,
     sources: list[tuple[str, int]],
     default_stub_value: c.Callable[[list[str]], dict[str, TValue]],
@@ -364,4 +368,4 @@ class CoverageCombineConfig(CoverageConfig):
         self.stub: bool = args.stub
 
         # only available to coverage combine
-        self.export: str = args.export if 'export' in args else False
+        self.export: str | None = args.export if 'export' in args else None

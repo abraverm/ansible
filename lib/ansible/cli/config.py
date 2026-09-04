@@ -10,7 +10,6 @@ from ansible.cli import CLI
 
 import os
 import shlex
-import subprocess
 import sys
 import yaml
 
@@ -21,11 +20,10 @@ import ansible.plugins.loader as plugin_loader
 
 from ansible import constants as C
 from ansible.cli.arguments import option_helpers as opt_help
-from ansible.config.manager import ConfigManager, Setting
-from ansible.errors import AnsibleError, AnsibleOptionsError
+from ansible.config.manager import ConfigManager
+from ansible.errors import AnsibleError, AnsibleOptionsError, AnsibleRequiredOptionError
 from ansible.module_utils.common.text.converters import to_native, to_text, to_bytes
-from ansible.module_utils.common.json import json_dump
-from ansible.module_utils.six import string_types
+from ansible._internal import _json
 from ansible.parsing.quoting import is_quoted
 from ansible.parsing.yaml.dumper import AnsibleDumper
 from ansible.utils.color import stringc
@@ -33,6 +31,9 @@ from ansible.utils.display import Display
 from ansible.utils.path import unfrackpath
 
 display = Display()
+
+
+_IGNORE_CHANGED = frozenset({'_terms', '_input'})
 
 
 def yaml_dump(data, default_flow_style=False, default_style=None):
@@ -44,14 +45,14 @@ def yaml_short(data):
 
 
 def get_constants():
-    ''' helper method to ensure we can template based on existing constants '''
+    """ helper method to ensure we can template based on existing constants """
     if not hasattr(get_constants, 'cvars'):
         get_constants.cvars = {k: getattr(C, k) for k in dir(C) if not k.startswith('__')}
     return get_constants.cvars
 
 
 def _ansible_env_vars(varname):
-    ''' return true or false depending if variable name is possibly a 'configurable' ansible env variable '''
+    """ return true or false depending if variable name is possibly a 'configurable' ansible env variable """
     return all(
         [
             varname.startswith("ANSIBLE_"),
@@ -102,8 +103,9 @@ class ConfigCLI(CLI):
         opt_help.add_verbosity_options(common)
         common.add_argument('-c', '--config', dest='config_file',
                             help="path to configuration file, defaults to first file found in precedence.")
-        common.add_argument("-t", "--type", action="store", default='base', dest='type', choices=['all', 'base'] + list(C.CONFIGURABLE_PLUGINS),
-                            help="Filter down to a specific plugin type.")
+        common.add_argument("-t", "--type", action="store", default='all', dest='type',
+                            choices=['all', 'base'] + list(C.CONFIGURABLE_PLUGINS),
+                            help="Filter down to a specific plugin type. Defaults to 'all'; use 'base' for the previous behavior.")
         common.add_argument('args', help='Specific plugin to target, requires type of plugin to be set', nargs='*')
 
         subparsers = self.parser.add_subparsers(dest='action')
@@ -133,7 +135,7 @@ class ConfigCLI(CLI):
 
         validate_parser = subparsers.add_parser('validate',
                                                 help='Validate the configuration file and environment variables. '
-                                                     'By default it only checks the base settings without accounting for plugins (see -t).',
+                                                     'By default it checks the base settings and all installed plugins (use -t to narrow down).',
                                                 parents=[common])
         validate_parser.set_defaults(func=self.execute_validate)
         validate_parser.add_argument('--format', '-f', dest='format', action='store', choices=['ini', 'env'] , default='ini',
@@ -148,6 +150,10 @@ class ConfigCLI(CLI):
     def run(self):
 
         super(ConfigCLI, self).run()
+
+        # initialize each galaxy server's options from known listed servers
+        self._galaxy_servers = [s for s in C.GALAXY_SERVER_LIST or [] if s]  # clean list, reused later here
+        C.config.load_galaxy_server_defs(self._galaxy_servers)
 
         if context.CLIARGS['config_file']:
             self.config_file = unfrackpath(context.CLIARGS['config_file'], follow=False)
@@ -171,8 +177,6 @@ class ConfigCLI(CLI):
             except Exception:
                 if context.CLIARGS['action'] in ['view']:
                     raise
-                elif context.CLIARGS['action'] in ['edit', 'update']:
-                    display.warning("File does not exist, used empty file: %s" % self.config_file)
 
         elif context.CLIARGS['action'] == 'view':
             raise AnsibleError('Invalid or no config file was supplied')
@@ -180,53 +184,15 @@ class ConfigCLI(CLI):
         # run the requested action
         context.CLIARGS['func']()
 
-    def execute_update(self):
-        '''
-        Updates a single setting in the specified ansible.cfg
-        '''
-        raise AnsibleError("Option not implemented yet")
-
-        # pylint: disable=unreachable
-        if context.CLIARGS['setting'] is None:
-            raise AnsibleOptionsError("update option requires a setting to update")
-
-        (entry, value) = context.CLIARGS['setting'].split('=')
-        if '.' in entry:
-            (section, option) = entry.split('.')
-        else:
-            section = 'defaults'
-            option = entry
-        subprocess.call([
-            'ansible',
-            '-m', 'ini_file',
-            'localhost',
-            '-c', 'local',
-            '-a', '"dest=%s section=%s option=%s value=%s backup=yes"' % (self.config_file, section, option, value)
-        ])
-
     def execute_view(self):
-        '''
+        """
         Displays the current config file
-        '''
+        """
         try:
             with open(self.config_file, 'rb') as f:
                 self.pager(to_text(f.read(), errors='surrogate_or_strict'))
         except Exception as e:
             raise AnsibleError("Failed to open config file: %s" % to_native(e))
-
-    def execute_edit(self):
-        '''
-        Opens ansible.cfg in the default EDITOR
-        '''
-        raise AnsibleError("Option not implemented yet")
-
-        # pylint: disable=unreachable
-        try:
-            editor = shlex.split(C.config.get_config_value('EDITOR'))
-            editor.append(self.config_file)
-            subprocess.call(editor)
-        except Exception as e:
-            raise AnsibleError("Failed to open editor: %s" % to_native(e))
 
     def _list_plugin_settings(self, ptype, plugins=None):
         entries = {}
@@ -259,13 +225,19 @@ class ConfigCLI(CLI):
         return entries
 
     def _list_entries_from_args(self):
-        '''
+        """
         build a dict with the list requested configs
-        '''
+        """
+
         config_entries = {}
         if context.CLIARGS['type'] in ('base', 'all'):
             # this dumps main/common configs
             config_entries = self.config.get_configuration_definitions(ignore_private=True)
+
+            # for base and all, we include galaxy servers
+            config_entries['GALAXY_SERVERS'] = {}
+            for server in self._galaxy_servers:
+                config_entries['GALAXY_SERVERS'][server] = self.config.get_configuration_definitions('galaxy_server', server)
 
         if context.CLIARGS['type'] != 'base':
             config_entries['PLUGINS'] = {}
@@ -281,15 +253,15 @@ class ConfigCLI(CLI):
         return config_entries
 
     def execute_list(self):
-        '''
+        """
         list and output available configs
-        '''
+        """
 
         config_entries = self._list_entries_from_args()
         if context.CLIARGS['format'] == 'yaml':
             output = yaml_dump(config_entries)
         elif context.CLIARGS['format'] == 'json':
-            output = json_dump(config_entries)
+            output = _json.json_dumps_formatted(config_entries)
 
         self.pager(to_text(output, errors='surrogate_or_strict'))
 
@@ -316,21 +288,21 @@ class ConfigCLI(CLI):
                         default = '0'
                 elif default:
                     if stype == 'list':
-                        if not isinstance(default, string_types):
+                        if not isinstance(default, str):
                             # python lists are not valid env ones
                             try:
                                 default = ', '.join(default)
                             except Exception as e:
                                 # list of other stuff
                                 default = '%s' % to_native(default)
-                    if isinstance(default, string_types) and not is_quoted(default):
+                    if isinstance(default, str) and not is_quoted(default):
                         default = shlex.quote(default)
                 elif default is None:
                     default = ''
 
             if subkey in settings[setting] and settings[setting][subkey]:
                 entry = settings[setting][subkey][-1]['name']
-                if isinstance(settings[setting]['description'], string_types):
+                if isinstance(settings[setting]['description'], str):
                     desc = settings[setting]['description']
                 else:
                     desc = '\n#'.join(settings[setting]['description'])
@@ -371,7 +343,7 @@ class ConfigCLI(CLI):
                         sections[s] = new_sections[s]
                 continue
 
-            if isinstance(opt['description'], string_types):
+            if isinstance(opt['description'], str):
                 desc = '# (%s) %s' % (opt.get('type', 'string'), opt['description'])
             else:
                 desc = "# (%s) " % opt.get('type', 'string')
@@ -389,7 +361,7 @@ class ConfigCLI(CLI):
                     seen[entry['section']].append(entry['key'])
 
                     default = self.config.template_default(opt.get('default', ''), get_constants())
-                    if opt.get('type', '') == 'list' and not isinstance(default, string_types):
+                    if opt.get('type', '') == 'list' and not isinstance(default, str):
                         # python lists are not valid ini ones
                         default = ', '.join(default)
                     elif default is None:
@@ -445,21 +417,21 @@ class ConfigCLI(CLI):
 
         entries = []
         for setting in sorted(config):
-            changed = (config[setting].origin not in ('default', 'REQUIRED'))
+            changed = (config[setting]['origin'] not in ('default', 'REQUIRED') and setting not in _IGNORE_CHANGED)
 
             if context.CLIARGS['format'] == 'display':
-                if isinstance(config[setting], Setting):
+                if isinstance(config[setting], dict):
                     # proceed normally
-                    value = config[setting].value
-                    if config[setting].origin == 'default':
+                    value = config[setting]['value']
+                    if config[setting]['origin'] == 'default' or setting in _IGNORE_CHANGED:
                         color = 'green'
                         value = self.config.template_default(value, get_constants())
-                    elif config[setting].origin == 'REQUIRED':
+                    elif config[setting]['origin'] == 'REQUIRED':
                         # should include '_terms', '_input', etc
                         color = 'red'
                     else:
                         color = 'yellow'
-                    msg = "%s(%s) = %s" % (setting, config[setting].origin, value)
+                    msg = "%s(%s) = %s" % (setting, config[setting]['origin'], value)
                 else:
                     color = 'green'
                     msg = "%s(%s) = %s" % (setting, 'default', config[setting].get('default'))
@@ -467,8 +439,10 @@ class ConfigCLI(CLI):
                 entry = stringc(msg, color)
             else:
                 entry = {}
-                for key in config[setting]._fields:
-                    entry[key] = getattr(config[setting], key)
+                for key in config[setting].keys():
+                    if key == 'type':
+                        continue
+                    entry[key] = config[setting][key]
 
             if not context.CLIARGS['only_changed'] or changed:
                 entries.append(entry)
@@ -476,19 +450,28 @@ class ConfigCLI(CLI):
         return entries
 
     def _get_global_configs(self):
-        config = self.config.get_configuration_definitions(ignore_private=True).copy()
+
+        # Add base
+        config = self.config.get_configuration_definitions(ignore_private=True)
+        # convert to settings
+        settings = {}
         for setting in config.keys():
             v, o = C.config.get_config_value_and_origin(setting, cfile=self.config_file, variables=get_constants())
-            config[setting] = Setting(setting, v, o, None)
+            settings[setting] = {
+                'name': setting,
+                'value': v,
+                'origin': o,
+                'type': None
+            }
 
-        return self._render_settings(config)
+        return self._render_settings(settings)
 
     def _get_plugin_configs(self, ptype, plugins):
 
         # prep loading
         loader = getattr(plugin_loader, '%s_loader' % ptype)
 
-        # acumulators
+        # accumulators
         output = []
         config_entries = {}
 
@@ -505,7 +488,7 @@ class ConfigCLI(CLI):
             plugin_cs = loader.all(class_only=True)
 
         for plugin in plugin_cs:
-            # in case of deprecastion they diverge
+            # in case of deprecation they diverge
             finalname = name = plugin._load_name
             if name.startswith('_'):
                 if os.path.islink(plugin._original_path):
@@ -528,18 +511,20 @@ class ConfigCLI(CLI):
             for setting in config_entries[finalname].keys():
                 try:
                     v, o = C.config.get_config_value_and_origin(setting, cfile=self.config_file, plugin_type=ptype, plugin_name=name, variables=get_constants())
-                except AnsibleError as e:
-                    if to_text(e).startswith('No setting was provided for required configuration'):
-                        v = None
-                        o = 'REQUIRED'
-                    else:
-                        raise e
+                except AnsibleRequiredOptionError:
+                    v = None
+                    o = 'REQUIRED'
 
                 if v is None and o is None:
                     # not all cases will be error
                     o = 'REQUIRED'
 
-                config_entries[finalname][setting] = Setting(setting, v, o, None)
+                config_entries[finalname][setting] = {
+                    'name': setting,
+                    'value': v,
+                    'origin': o,
+                    'type': None
+                }
 
             # pretty please!
             results = self._render_settings(config_entries[finalname])
@@ -553,17 +538,65 @@ class ConfigCLI(CLI):
 
         return output
 
+    def _get_galaxy_server_configs(self):
+
+        output = []
+        # add galaxy servers
+        for server in self._galaxy_servers:
+            server_config = {}
+            s_config = self.config.get_configuration_definitions('galaxy_server', server)
+            for setting in s_config.keys():
+                try:
+                    v, o = C.config.get_config_value_and_origin(setting, plugin_type='galaxy_server', plugin_name=server, cfile=self.config_file)
+                except AnsibleError as e:
+                    if s_config[setting].get('required', False):
+                        v = None
+                        o = 'REQUIRED'
+                    else:
+                        raise e
+                if v is None and o is None:
+                    # not all cases will be error
+                    o = 'REQUIRED'
+                server_config[setting] = {
+                    'name': setting,
+                    'value': v,
+                    'origin': o,
+                    'type': None
+                }
+            if context.CLIARGS['format'] == 'display':
+                if not context.CLIARGS['only_changed'] or server_config:
+                    equals = '=' * len(server)
+                    output.append(f'\n{server}\n{equals}')
+                    output.extend(self._render_settings(server_config))
+            else:
+                output.append({server: server_config})
+
+        return output
+
     def execute_dump(self):
-        '''
+        """
         Shows the current settings, merges ansible.cfg if specified
-        '''
-        if context.CLIARGS['type'] == 'base':
+        """
+        output = []
+        if context.CLIARGS['type'] in ('base', 'all'):
             # deal with base
             output = self._get_global_configs()
-        elif context.CLIARGS['type'] == 'all':
-            # deal with base
-            output = self._get_global_configs()
-            # deal with plugins
+
+            # add galaxy servers
+            server_config_list = self._get_galaxy_server_configs()
+            if context.CLIARGS['format'] == 'display':
+                output.append('\nGALAXY_SERVERS:\n')
+                output.extend(server_config_list)
+            else:
+                configs = {}
+                for server_config in server_config_list:
+                    server = list(server_config.keys())[0]
+                    server_reduced_config = server_config.pop(server)
+                    configs[server] = list(server_reduced_config.values())
+                output.append({'GALAXY_SERVERS': configs})
+
+        if context.CLIARGS['type'] == 'all':
+            # add all plugins
             for ptype in C.CONFIGURABLE_PLUGINS:
                 plugin_list = self._get_plugin_configs(ptype, context.CLIARGS['args'])
                 if context.CLIARGS['format'] == 'display':
@@ -576,8 +609,9 @@ class ConfigCLI(CLI):
                     else:
                         pname = '%s_PLUGINS' % ptype.upper()
                     output.append({pname: plugin_list})
-        else:
-            # deal with plugins
+
+        elif context.CLIARGS['type'] != 'base':
+            # deal with specific plugin
             output = self._get_plugin_configs(context.CLIARGS['type'], context.CLIARGS['args'])
 
         if context.CLIARGS['format'] == 'display':
@@ -585,7 +619,7 @@ class ConfigCLI(CLI):
         if context.CLIARGS['format'] == 'yaml':
             text = yaml_dump(output)
         elif context.CLIARGS['format'] == 'json':
-            text = json_dump(output)
+            text = _json.json_dumps_formatted(output)
 
         self.pager(to_text(text, errors='surrogate_or_strict'))
 
@@ -594,6 +628,7 @@ class ConfigCLI(CLI):
         found = False
         config_entries = self._list_entries_from_args()
         plugin_types = config_entries.pop('PLUGINS', None)
+        galaxy_servers = config_entries.pop('GALAXY_SERVERS', None)
 
         if context.CLIARGS['format'] == 'ini':
             if C.CONFIG_FILE is not None:
@@ -610,6 +645,14 @@ class ConfigCLI(CLI):
                                     sections[s].update(plugin_sections[s])
                                 else:
                                     sections[s] = plugin_sections[s]
+                if galaxy_servers:
+                    for server in galaxy_servers:
+                        server_sections = _get_ini_entries(galaxy_servers[server])
+                        for s in server_sections:
+                            if s in sections:
+                                sections[s].update(server_sections[s])
+                            else:
+                                sections[s] = server_sections[s]
                 if sections:
                     p = C.config._parsers[C.CONFIG_FILE]
                     for s in p.sections():

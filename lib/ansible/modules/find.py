@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 
-DOCUMENTATION = r'''
+DOCUMENTATION = r"""
 ---
 module: find
 author: Brian Coca (@bcoca)
@@ -27,29 +27,33 @@ options:
             - Select files whose age is equal to or greater than the specified time.
             - Use a negative age to find files equal to or less than the specified time.
             - You can choose seconds, minutes, hours, days, or weeks by specifying the
-              first letter of any of those words (e.g., "1w").
+              first letter of any of those words (for example V(1w)).
         type: str
+    get_checksum:
+        default: false
+    checksum_algorithm:
+        version_added: "2.19"
     patterns:
         default: []
         description:
             - One or more (shell or regex) patterns, which type is controlled by O(use_regex) option.
-            - The patterns restrict the list of files to be returned to those whose basenames match at
+            - The patterns restrict the list of files to be returned to those whose base names match at
               least one of the patterns specified. Multiple patterns can be specified using a list.
             - The pattern is matched against the file base name, excluding the directory.
-            - When using regexen, the pattern MUST match the ENTIRE file name, not just parts of it. So
-              if you are looking to match all files ending in .default, you'd need to use C(.*\.default)
-              as a regexp and not just C(\.default).
+            - If O(use_regex=true), the pattern matches against the beginning of the file name using Python's
+              C(re.match(\)). To match the entire file name rather than just a prefix, anchor the end of the
+              pattern with V($). For example, to match all C(.md) files, use V(.*\\.md$) instead of V(\\.md).
             - This parameter expects a list, which can be either comma separated or YAML. If any of the
               patterns contain a comma, make sure to put them in a list to avoid splitting the patterns
               in undesirable ways.
-            - Defaults to V(*) when O(use_regex=False), or V(.*) when O(use_regex=True).
+            - Defaults to V(*) when O(use_regex=false), or V(.*) when O(use_regex=true).
         type: list
         aliases: [ pattern ]
         elements: str
     excludes:
         description:
             - One or more (shell or regex) patterns, which type is controlled by O(use_regex) option.
-            - Items whose basenames match an O(excludes) pattern are culled from O(patterns) matches.
+            - Items whose base names match an O(excludes) pattern are culled from O(patterns) matches.
               Multiple patterns can be specified using a list.
         type: list
         aliases: [ exclude ]
@@ -58,31 +62,32 @@ options:
     contains:
         description:
             - A regular expression or pattern which should be matched against the file content.
-            - If O(read_whole_file) is V(false) it matches against the beginning of the line (uses
-              V(re.match(\))). If O(read_whole_file) is V(true), it searches anywhere for that pattern
-              (uses V(re.search(\))).
+            - If O(read_whole_file=false) it matches against the beginning of the line (uses
+              C(re.match(\))). If O(read_whole_file=true), it searches anywhere for that pattern
+              (uses C(re.search(\))).
             - Works only when O(file_type) is V(file).
         type: str
     read_whole_file:
         description:
-            - When doing a C(contains) search, determines whether the whole file should be read into
+            - When doing a O(contains) search, determines whether the whole file should be read into
               memory or if the regex should be applied to the file line-by-line.
-            - Setting this to C(true) can have performance and memory implications for large files.
-            - This uses V(re.search(\)) instead of V(re.match(\)).
+            - Setting this to V(true) can have performance and memory implications for large files.
+            - This uses C(re.search(\)) instead of C(re.match(\)).
         type: bool
         default: false
         version_added: "2.11"
     paths:
         description:
             - List of paths of directories to search. All paths must be fully qualified.
+            - From ansible-core 2.18 and onwards, the data type has changed from C(str) to C(path).
         type: list
         required: true
         aliases: [ name, path ]
-        elements: str
+        elements: path
     file_type:
         description:
             - Type of file to select.
-            - The 'link' and 'any' choices were added in Ansible 2.3.
+            - The V(link) and V(any) choices were added in Ansible 2.3.
         type: str
         choices: [ any, directory, file, link ]
         default: file
@@ -95,7 +100,7 @@ options:
         description:
             - Select files whose size is equal to or greater than the specified size.
             - Use a negative size to find files equal to or less than the specified size.
-            - Unqualified values are in bytes but b, k, m, g, and t can be appended to specify
+            - Unqualified values are in bytes but V(b), V(k), V(m), V(g), and V(t) can be appended to specify
               bytes, kilobytes, megabytes, gigabytes, and terabytes, respectively.
             - Size is not evaluated for directories.
         type: str
@@ -107,16 +112,16 @@ options:
         default: mtime
     hidden:
         description:
-            - Set this to V(true) to include hidden files, otherwise they will be ignored.
+            - Set this to V(true) to include hidden files, otherwise they are ignored.
         type: bool
         default: no
     mode:
         description:
             - Choose objects matching a specified permission. This value is
               restricted to modes that can be applied using the python
-              C(os.chmod) function.
+              C(os.chmod(\)) function.
             - The mode can be provided as an octal such as V("0644") or
-              as symbolic such as V(u=rw,g=r,o=r)
+              as symbolic such as V(u=rw,g=r,o=r).
         type: raw
         version_added: '2.16'
     exact_mode:
@@ -131,30 +136,34 @@ options:
             - Set this to V(true) to follow symlinks in path for systems with python 2.6+.
         type: bool
         default: no
-    get_checksum:
-        description:
-            - Set this to V(true) to retrieve a file's SHA1 checksum.
-        type: bool
-        default: no
     use_regex:
         description:
             - If V(false), the patterns are file globs (shell).
-            - If V(true), they are python regexes.
+            - If V(true), they are Python regular expressions.
         type: bool
         default: no
     depth:
         description:
             - Set the maximum number of levels to descend into.
-            - Setting recurse to V(false) will override this value, which is effectively depth 1.
+            - Setting O(recurse=false) is effectively O(depth=1) and overrides this value.
             - Default is unlimited depth.
         type: int
         version_added: "2.6"
     encoding:
         description:
-            - When doing a C(contains) search, determine the encoding of the files to be searched.
+            - When doing a O(contains) search, determine the encoding of the files to be searched.
+            - When no value is provided, the Python default encoding is used.
         type: str
         version_added: "2.17"
-extends_documentation_fragment: action_common_attributes
+    limit:
+        description:
+            - Limit the maximum number of matching paths returned. After finding this many, the find action stops looking.
+            - Matches are made from the top, down (meaning the shallowest directory first).
+            - If not set, or set to V(null), it performs unlimited matches.
+            - Default is unlimited matches.
+        type: int
+        version_added: "2.18"
+extends_documentation_fragment: [action_common_attributes, checksum_common]
 attributes:
     check_mode:
         details: since this action does not modify the target it just executes normally during check mode
@@ -165,10 +174,10 @@ attributes:
         platforms: posix
 seealso:
 - module: ansible.windows.win_find
-'''
+"""
 
 
-EXAMPLES = r'''
+EXAMPLES = r"""
 - name: Recursively find /tmp files older than 2 days
   ansible.builtin.find:
     paths: /tmp
@@ -227,9 +236,19 @@ EXAMPLES = r'''
       - '^_[0-9]{2,4}_.*.log$'
       - '^[a-z]{1,5}_.*log$'
 
-'''
+- name: Find file containing "wally" without necessarily reading all files
+  ansible.builtin.find:
+    paths: /var/log
+    file_type: file
+    contains: wally
+    read_whole_file: true
+    patterns: "^.*\\.log$"
+    use_regex: true
+    recurse: true
+    limit: 1
+"""
 
-RETURN = r'''
+RETURN = r"""
 files:
     description: All matches found with the specified criteria (see stat module for full output of each dictionary)
     returned: success
@@ -260,11 +279,12 @@ skipped_paths:
     type: dict
     sample: {"/laskdfj": "'/laskdfj' is not a directory"}
     version_added: '2.12'
-'''
+"""
 
 import errno
 import fnmatch
 import grp
+import locale
 import os
 import pwd
 import re
@@ -273,7 +293,6 @@ import time
 
 from ansible.module_utils.common.text.converters import to_text, to_native
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.six import string_types
 
 
 class _Object:
@@ -283,7 +302,7 @@ class _Object:
 
 
 def pfilter(f, patterns=None, excludes=None, use_regex=False):
-    '''filter using glob patterns'''
+    """filter using glob patterns"""
     if not patterns and not excludes:
         return True
 
@@ -322,7 +341,7 @@ def pfilter(f, patterns=None, excludes=None, use_regex=False):
 
 
 def agefilter(st, now, age, timestamp):
-    '''filter files older than age'''
+    """filter files older than age"""
     if age is None:
         return True
     elif age >= 0 and now - getattr(st, "st_%s" % timestamp) >= abs(age):
@@ -333,7 +352,7 @@ def agefilter(st, now, age, timestamp):
 
 
 def sizefilter(st, size):
-    '''filter files greater than size'''
+    """filter files greater than size"""
     if size is None:
         return True
     elif size >= 0 and st.st_size >= abs(size):
@@ -371,8 +390,13 @@ def contentfilter(fsname, pattern, encoding, read_whole_file=False):
         raise e
     except UnicodeDecodeError as e:
         if encoding is None:
-            encoding = 'None (default determined by the Python built-in function "open")'
-        msg = f'Failed to read the file {fsname} due to an encoding error. current encoding: {encoding}'
+            # Get the default encoding for the current locale
+            # This is the same encoding that the open() function uses by default
+            # when no encoding is specified. This value is platform dependent.
+            #
+            # https://docs.python.org/3/library/functions.html#open
+            encoding = f"{locale.getpreferredencoding(False).lower()} (Python default)"
+        msg = f'Failed to decode the file {fsname!r} with encoding: {encoding}'
         raise Exception(msg) from e
     except Exception:
         pass
@@ -413,7 +437,7 @@ def statinfo(st):
     except Exception:
         pass
 
-    return {
+    output = {
         'mode': "%04o" % stat.S_IMODE(st.st_mode),
         'isdir': stat.S_ISDIR(st.st_mode),
         'ischr': stat.S_ISCHR(st.st_mode),
@@ -446,11 +470,17 @@ def statinfo(st):
         'isgid': bool(st.st_mode & stat.S_ISGID),
     }
 
+    if hasattr(st, 'st_blocks'):
+        output['blocks'] = st.st_blocks
+        output['disk_usage_bytes'] = st.st_blocks * 512
+
+    return output
+
 
 def main():
     module = AnsibleModule(
         argument_spec=dict(
-            paths=dict(type='list', required=True, aliases=['name', 'path'], elements='str'),
+            paths=dict(type='list', required=True, aliases=['name', 'path'], elements='path'),
             patterns=dict(type='list', default=[], aliases=['pattern'], elements='str'),
             excludes=dict(type='list', aliases=['exclude'], elements='str'),
             contains=dict(type='str'),
@@ -463,18 +493,22 @@ def main():
             hidden=dict(type='bool', default=False),
             follow=dict(type='bool', default=False),
             get_checksum=dict(type='bool', default=False),
+            checksum_algorithm=dict(type='str', default='sha1',
+                                    choices=['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512'],
+                                    aliases=['checksum', 'checksum_algo']),
             use_regex=dict(type='bool', default=False),
             depth=dict(type='int'),
             mode=dict(type='raw'),
             exact_mode=dict(type='bool', default=True),
-            encoding=dict(type='str')
+            encoding=dict(type='str'),
+            limit=dict(type='int')
         ),
         supports_check_mode=True,
     )
 
     params = module.params
 
-    if params['mode'] and not isinstance(params['mode'], string_types):
+    if params['mode'] and not isinstance(params['mode'], str):
         module.fail_json(
             msg="argument 'mode' is not a string and conversion is not allowed, value is of type %s" % params['mode'].__class__.__name__
         )
@@ -493,7 +527,7 @@ def main():
     skipped = {}
 
     def handle_walk_errors(e):
-        if e.errno in (errno.EPERM, errno.EACCES):
+        if e.errno in (errno.EPERM, errno.EACCES, errno.ENOENT):
             skipped[e.filename] = to_text(e)
             return
         raise e
@@ -520,17 +554,20 @@ def main():
         else:
             module.fail_json(size=params['size'], msg="failed to process size")
 
+    if params['limit'] is not None and params['limit'] <= 0:
+        module.fail_json(msg="limit cannot be %d (use None for unlimited)" % params['limit'])
+
     now = time.time()
     msg = 'All paths examined'
     looked = 0
     has_warnings = False
     for npath in params['paths']:
-        npath = os.path.expanduser(os.path.expandvars(npath))
         try:
             if not os.path.isdir(npath):
                 raise Exception("'%s' is not a directory" % to_native(npath))
 
-            for root, dirs, files in os.walk(npath, onerror=handle_walk_errors, followlinks=params['follow']):
+            # Setting `topdown=True` to explicitly guarantee matches are made from the shallowest directory first
+            for root, dirs, files in os.walk(npath, onerror=handle_walk_errors, followlinks=params['follow'], topdown=True):
                 looked = looked + len(files) + len(dirs)
                 for fsobj in (files + dirs):
                     fsname = os.path.normpath(os.path.join(root, fsobj))
@@ -546,9 +583,9 @@ def main():
 
                     try:
                         st = os.lstat(fsname)
-                    except (IOError, OSError) as e:
-                        module.warn("Skipped entry '%s' due to this access issue: %s\n" % (fsname, to_text(e)))
-                        skipped[fsname] = to_text(e)
+                    except OSError as ex:
+                        module.error_as_warning(f"Skipped entry {fsname!r} due to access issue.", exception=ex)
+                        skipped[fsname] = str(ex)
                         has_warnings = True
                         continue
 
@@ -560,7 +597,7 @@ def main():
 
                             r.update(statinfo(st))
                             if stat.S_ISREG(st.st_mode) and params['get_checksum']:
-                                r['checksum'] = module.sha1(fsname)
+                                r['checksum'] = module.digest_from_file(fsname, params['checksum_algorithm'])
 
                             if stat.S_ISREG(st.st_mode):
                                 if sizefilter(st, size):
@@ -585,7 +622,7 @@ def main():
 
                             r.update(statinfo(st))
                             if params['get_checksum']:
-                                r['checksum'] = module.sha1(fsname)
+                                r['checksum'] = module.digest_from_file(fsname, params['checksum_algorithm'])
                             filelist.append(r)
 
                     elif stat.S_ISLNK(st.st_mode) and params['file_type'] == 'link':
@@ -596,7 +633,12 @@ def main():
                             r.update(statinfo(st))
                             filelist.append(r)
 
-                if not params['recurse']:
+                    if len(filelist) == params["limit"]:
+                        # Breaks out of directory files loop only
+                        msg = "Limit of matches reached"
+                        break
+
+                if not params['recurse'] or len(filelist) == params["limit"]:
                     break
         except Exception as e:
             skipped[npath] = to_text(e)

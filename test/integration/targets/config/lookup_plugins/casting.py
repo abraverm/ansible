@@ -7,7 +7,7 @@ from __future__ import annotations
 DOCUMENTATION = """
     name: casting
     author: Ansible Core Team
-    version_added: histerical
+    version_added: hysterical
     short_description: returns what you gave it
     description:
       - this is mostly a noop
@@ -15,16 +15,16 @@ DOCUMENTATION = """
         _terms:
             description: stuff to pass through
         test_list:
-            description: does nothihng, just for testing values
+            description: does nothing, just for testing values
             type: list
         test_int:
-            description: does nothihng, just to test casting
+            description: does nothing, just to test casting
             type: int
         test_bool:
-            description: does nothihng, just to test casting
+            description: does nothing, just to test casting
             type: bool
         test_str:
-            description: does nothihng, just to test casting
+            description: does nothing, just to test casting
             type: str
 """
 
@@ -52,7 +52,7 @@ class LookupModule(LookupBase):
         for cast in (list, int, bool, str):
             option = 'test_%s' % str(cast).replace("<class '", '').replace("'>", '')
             value = self.get_option(option)
-            if value is None or type(value) is cast:
+            if value is None or isinstance(value, cast):
                 continue
             raise Exception('%s is not a %s: got %s/%s' % (option, cast, type(value), value))
 

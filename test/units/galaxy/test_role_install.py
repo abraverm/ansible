@@ -28,7 +28,7 @@ def call_galaxy_cli(args):
         co.GlobalCLIArgs._Singleton__instance = orig
 
 
-@pytest.fixture(autouse='function')
+@pytest.fixture(autouse=True)
 def reset_cli_args():
     co.GlobalCLIArgs._Singleton__instance = None
     yield
@@ -132,6 +132,7 @@ def test_role_import(state, rc, mocker, galaxy_server, monkeypatch):
     ]
     mock_api = mocker.MagicMock(side_effect=[StringIO(json.dumps(rsp)) for rsp in responses])
     monkeypatch.setattr(api, 'open_url', mock_api)
+    monkeypatch.setattr(GalaxyCLI, '_task_check_delay_sec', 0.1)
     assert call_galaxy_cli(['import', 'user', 'role']) == rc
 
 

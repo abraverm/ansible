@@ -20,6 +20,7 @@ DOCUMENTATION = """
         which simplifies password management in C("host_vars") variables.'
       - A special case is using /dev/null as a path. The password lookup will generate a new random password each time,
         but will not write it to /dev/null. This can be used when you need a password without storing it on the controller.
+    positional: _terms
     options:
       _terms:
          description:
@@ -67,7 +68,7 @@ DOCUMENTATION = """
         description:
           - A seed to initialize the random number generator.
           - Identical seeds will yield identical passwords.
-          - Use this for random-but-idempotent password generation.
+          - B(Note) that a weak seed, one without enough entropy, will not create a sufficiently secure encryption for the password.
         type: str
     notes:
       - A great alternative to the password lookup plugin,
@@ -113,7 +114,7 @@ EXAMPLES = """
   ansible.builtin.set_fact:
     random_pod_name: "web-{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=8) }}"
 
-- name: create random but idempotent password
+- name: create idempotent password for use in testing/CI, not recommended for production
   ansible.builtin.set_fact:
     password: "{{ lookup('ansible.builtin.password', '/dev/null', seed=inventory_hostname) }}"
 """
@@ -126,6 +127,7 @@ _raw:
   elements: str
 """
 
+import contextlib
 import os
 import string
 import time
@@ -133,7 +135,6 @@ import hashlib
 
 from ansible.errors import AnsibleError, AnsibleAssertionError
 from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
-from ansible.module_utils.six import string_types
 from ansible.parsing.splitter import parse_kv
 from ansible.plugins.lookup import LookupBase
 from ansible.utils.encrypt import BaseHash, do_encrypt, random_password, random_salt
@@ -160,7 +161,7 @@ def _read_password_file(b_path):
 
 
 def _gen_candidate_chars(characters):
-    '''Generate a string containing all valid chars as defined by ``characters``
+    """Generate a string containing all valid chars as defined by ``characters``
 
     :arg characters: A list of character specs. The character specs are
         shorthand names for sets of characters like 'digits', 'ascii_letters',
@@ -181,7 +182,7 @@ def _gen_candidate_chars(characters):
     the question mark and pipe characters directly. Return will be the string::
 
         u'0123456789?|'
-    '''
+    """
     chars = []
     for chars_spec in characters:
         # getattr from string expands things like "ascii_letters" and "digits"
@@ -192,11 +193,11 @@ def _gen_candidate_chars(characters):
 
 
 def _parse_content(content):
-    '''parse our password data format into password and salt
+    """parse our password data format into password and salt
 
     :arg content: The data read from the file
     :returns: password and salt
-    '''
+    """
     password = content
     salt = None
     ident = None
@@ -269,15 +270,12 @@ def _get_lock(b_path):
     b_pathdir = os.path.dirname(b_path)
     lockfile_name = to_bytes("%s.ansible_lockfile" % hashlib.sha1(b_path).hexdigest())
     lockfile = os.path.join(b_pathdir, lockfile_name)
-    if not os.path.exists(lockfile) and b_path != to_bytes('/dev/null'):
-        try:
-            makedirs_safe(b_pathdir, mode=0o700)
+    if b_path != b'/dev/null':
+        makedirs_safe(b_pathdir, mode=0o700)
+        with contextlib.suppress(FileExistsError):
             fd = os.open(lockfile, os.O_CREAT | os.O_EXCL)
             os.close(fd)
             first_process = True
-        except OSError as e:
-            if e.strerror != 'File exists':
-                raise
 
     counter = 0
     # if the lock is got by other process, wait until it's released
@@ -337,7 +335,7 @@ class LookupModule(LookupBase):
 
         # chars still might need more
         chars = params.get('chars', self.get_option('chars'))
-        if chars and isinstance(chars, string_types):
+        if chars and isinstance(chars, str):
             tmp_chars = []
             if u',,' in chars:
                 tmp_chars.append(u',')
@@ -350,7 +348,7 @@ class LookupModule(LookupBase):
 
         return relpath, params
 
-    def run(self, terms, variables, **kwargs):
+    def run(self, terms, variables=None, **kwargs):
         ret = []
 
         for term in terms:

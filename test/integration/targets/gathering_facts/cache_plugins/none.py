@@ -7,14 +7,14 @@ from __future__ import annotations
 
 from ansible.plugins.cache import BaseCacheModule
 
-DOCUMENTATION = '''
+DOCUMENTATION = """
     cache: none
     short_description: write-only cache (no cache)
     description:
         - No caching at all
     version_added: historical
     author: core team (@ansible-core)
-'''
+"""
 
 
 class CacheModule(BaseCacheModule):
@@ -34,7 +34,7 @@ class CacheModule(BaseCacheModule):
         return key in self.empty
 
     def delete(self, key):
-        del self.emtpy[key]
+        del self.empty[key]
 
     def flush(self):
         self.empty = {}
